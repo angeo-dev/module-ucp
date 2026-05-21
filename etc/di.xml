@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright (c) 2026 Ievgenii Gryshkun (angeo.dev)
+ * MIT License — see LICENSE for full terms.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+
+    <!--
+        Register Angeo\Ucp\Controller\Router as a standard router that catches
+        /.well-known/ucp. SortOrder=22 places it before the CMS router (60) and
+        after the standard router (20), so well-known requests don't hit CMS 404.
+    -->
+    <type name="Magento\Framework\App\RouterList">
+        <arguments>
+            <argument name="routerList" xsi:type="array">
+                <item name="angeo_ucp_wellknown" xsi:type="array">
+                    <item name="class" xsi:type="string">Angeo\Ucp\Controller\Router</item>
+                    <item name="disable" xsi:type="boolean">false</item>
+                    <item name="sortOrder" xsi:type="string">22</item>
+                </item>
+            </argument>
+        </arguments>
+    </type>
+
+    <!--
+        Wire ProfileGeneratorInterface to its default implementation.
+    -->
+    <preference for="Angeo\Ucp\Api\ProfileGeneratorInterface"
+                type="Angeo\Ucp\Model\ProfileGenerator"/>
+
+    <!--
+        Register CLI commands.
+    -->
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="angeo_ucp_keys_generate" xsi:type="object">
+                    Angeo\Ucp\Console\Command\GenerateKeysCommand
+                </item>
+                <item name="angeo_ucp_validate" xsi:type="object">
+                    Angeo\Ucp\Console\Command\ValidateProfileCommand
+                </item>
+            </argument>
+        </arguments>
+    </type>
+
+</config>

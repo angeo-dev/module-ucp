@@ -1,0 +1,16 @@
+parameters:
+    level: 6
+    paths:
+        - Api
+        - Console
+        - Controller
+        - Model
+    excludePaths:
+        - Test
+        - vendor
+    ignoreErrors:
+        # Magento framework interfaces are not auto-discoverable without
+        # the full Magento source tree. CI uses continue-on-error for now;
+        # this section is for known noise we want suppressed regardless.
+        - '#Call to an undefined method Magento\\#'
+    treatPhpDocTypesAsCertain: false

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright (c) 2026 Ievgenii Gryshkun (angeo.dev)
+ * MIT License — see LICENSE for full terms.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Store:etc/config.xsd">
+    <default>
+        <angeo_ucp>
+            <general>
+                <enabled>0</enabled>
+            </general>
+            <capabilities>
+                <catalog_enabled>0</catalog_enabled>
+                <cart_enabled>0</cart_enabled>
+                <checkout_enabled>0</checkout_enabled>
+                <order_enabled>0</order_enabled>
+                <identity_linking_enabled>0</identity_linking_enabled>
+            </capabilities>
+            <transport>
+                <rest_endpoint></rest_endpoint>
+            </transport>
+            <keys>
+                <signing_key_jwk></signing_key_jwk>
+            </keys>
+        </angeo_ucp>
+    </default>
+</config>

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright (c) 2026 Ievgenii Gryshkun (angeo.dev)
+ * MIT License — see LICENSE for full terms.
+ *
+ * Internal route — used by Angeo\Ucp\Controller\Router to map /.well-known/ucp
+ * to the UCP profile controller. Magento frontNames cannot contain dots, so
+ * the well-known path is handled by the custom router declared in di.xml.
+ *
+ * UCP profile discovery endpoint per
+ * https://ucp.dev/latest/specification/overview/#profile-structure
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:App/etc/routes.xsd">
+    <router id="standard">
+        <route id="angeo_ucp" frontName="angeo_ucp_internal">
+            <module name="Angeo_Ucp"/>
+        </route>
+    </router>
+</config>

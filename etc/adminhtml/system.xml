@@ -1,0 +1,118 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright (c) 2026 Ievgenii Gryshkun (angeo.dev)
+ * MIT License — see LICENSE for full terms.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system_file.xsd">
+    <system>
+        <tab id="angeo" translate="label" sortOrder="500">
+            <label>Angeo</label>
+        </tab>
+        <section id="angeo_ucp" translate="label"
+                 type="text" sortOrder="20"
+                 showInDefault="1" showInWebsite="1" showInStore="1">
+            <class>separator-top</class>
+            <label>UCP (Universal Commerce Protocol)</label>
+            <tab>angeo</tab>
+            <resource>Angeo_Ucp::config</resource>
+
+            <group id="general" translate="label comment"
+                   type="text" sortOrder="10"
+                   showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>General</label>
+                <comment><![CDATA[
+                    Configures the UCP profile served at
+                    <code>/.well-known/ucp</code>. Protocol version
+                    <code>2026-04-08</code>.
+                ]]></comment>
+                <field id="enabled" translate="label comment"
+                       type="select" sortOrder="10"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Advertise UCP Profile</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[
+                        When disabled, <code>/.well-known/ucp</code> returns
+                        a 404. Disable on stores that should not be discoverable
+                        by AI agents.
+                    ]]></comment>
+                </field>
+            </group>
+
+            <group id="capabilities" translate="label comment"
+                   type="text" sortOrder="20"
+                   showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>Declared Capabilities</label>
+                <comment><![CDATA[
+                    <strong>v0.1.0 is a profile-only release.</strong>
+                    Enabling a capability here ONLY adds it to the advertised
+                    profile — the actual REST endpoints are not implemented yet.
+                    Real catalog/cart/checkout endpoints land in v0.2.0+.
+                    Leave all capabilities disabled in production until the
+                    matching endpoint module is installed.
+                ]]></comment>
+                <field id="catalog_enabled" translate="label" type="select" sortOrder="10"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Catalog (dev.ucp.shopping.catalog)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+                <field id="cart_enabled" translate="label" type="select" sortOrder="20"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Cart (dev.ucp.shopping.cart)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+                <field id="checkout_enabled" translate="label" type="select" sortOrder="30"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Checkout (dev.ucp.shopping.checkout)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+                <field id="order_enabled" translate="label" type="select" sortOrder="40"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Order (dev.ucp.shopping.order)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+                <field id="identity_linking_enabled" translate="label" type="select" sortOrder="50"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Identity Linking (dev.ucp.common.identity_linking)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+            </group>
+
+            <group id="transport" translate="label" type="text" sortOrder="30"
+                   showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>Transport</label>
+                <field id="rest_endpoint" translate="label comment" type="text" sortOrder="10"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>REST Endpoint URL</label>
+                    <comment><![CDATA[
+                        Base URL for the dev.ucp.shopping REST service. Leave
+                        blank to use <code>{baseUrl}/rest/V1/ucp</code>.
+                        Override only if you front the UCP API with a separate
+                        host or path.
+                    ]]></comment>
+                </field>
+            </group>
+
+            <group id="keys" translate="label comment" type="text" sortOrder="40"
+                   showInDefault="1" showInWebsite="0" showInStore="0">
+                <label>Signing Keys</label>
+                <comment><![CDATA[
+                    Generated via CLI: <code>bin/magento angeo:ucp:keys:generate</code>.
+                    Only the <em>public</em> JWK is stored here; the private PEM
+                    must be placed in <code>app/etc/env.php</code> by the operator.
+                ]]></comment>
+                <field id="signing_key_jwk" translate="label comment" type="textarea" sortOrder="10"
+                       showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Public JWK (read-only)</label>
+                    <comment>
+                        Populated by the keys:generate command. Edit only if you
+                        know what you are doing — manual edits can desync from the
+                        private PEM in env.php.
+                    </comment>
+                </field>
+            </group>
+        </section>
+    </system>
+</config>
