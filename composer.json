@@ -35,7 +35,7 @@
     ],
     "support": {
         "issues": "https://github.com/angeo-dev/module-ucp/issues",
-        "source": "https://github.com/angeo-dev/module-ucp",
+        "source": "https://github.com/angeo-dev/module-ucp"
     },
     "autoload": {
         "files": [
