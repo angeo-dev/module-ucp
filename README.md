@@ -1,7 +1,6 @@
 [![Packagist Version](https://img.shields.io/packagist/v/angeo/module-ucp.svg)](https://packagist.org/packages/angeo/module-ucp)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PHP](https://img.shields.io/badge/php->%3D8.2-8892BF.svg)](https://php.net)
-[![CI](https://github.com/angeo-dev/module-ucp/actions/workflows/ci.yml/badge.svg)](https://github.com/angeo-dev/module-ucp/actions)
 
 # angeo/module-ucp
 
@@ -9,7 +8,7 @@
 
 Generates `/.well-known/ucp` at protocol version `2026-04-08` with ECDSA P-256 signing keys, declared capabilities, and proper cache headers — the discovery layer AI agents fetch first when interacting with your store.
 
-> **v0.1.0-beta is the profile-only release.** It exposes a valid UCP profile to AI platforms. The actual REST endpoints for catalog, cart, checkout and order land in later versions. Enabling a capability here adds it to the advertised profile but does NOT implement the matching endpoint — leave capabilities disabled in production until the matching endpoint module is installed. The module is tagged `0.1.0-beta` to signal pre-stable status under semver.
+> **v0.1.x is the profile-only release line.** It exposes a valid UCP profile to AI platforms. The actual REST endpoints for catalog, cart, checkout and order land in later versions. Enabling a capability here adds it to the advertised profile but does NOT implement the matching endpoint — leave capabilities disabled in production until the matching endpoint module is installed. The current pre-release is `0.1.1-beta`; install it explicitly per [Installation](#installation) below.
 
 ---
 
@@ -36,13 +35,23 @@ Generates `/.well-known/ucp` at protocol version `2026-04-08` with ECDSA P-256 s
 
 ## Installation
 
+The current `0.1.x` line is a beta — install with the explicit `@beta` stability qualifier:
+
 ```bash
-composer require angeo/module-ucp
+composer require angeo/module-ucp:^0.1@beta
 bin/magento module:enable Angeo_Ucp
 bin/magento setup:upgrade
 bin/magento setup:di:compile
 bin/magento cache:flush
 ```
+
+The `@beta` qualifier scopes the stability exception to this package only — your project's other dependencies stay locked to whatever `minimum-stability` you have configured.
+
+Once the `0.1.x` line goes stable (planned after a short field-test window) the installation command will simply be `composer require angeo/module-ucp`.
+
+> **Note on `0.1.0`:** an early `0.1.0` tag was published before the composer.json
+> was valid and before `magento/module-store` was declared as a dependency.
+> `0.1.0` is treated as yanked — start from `0.1.1-beta` or later.
 
 ---
 
@@ -199,7 +208,7 @@ CI runs the matrix PHP 8.2 / 8.3 / 8.4 on every push.
 
 | Version | Scope |
 | --- | --- |
-| **0.1.0-beta** *(current)* | Profile generator, signing keys, admin UI, CLI, tests, CI |
+| **0.1.1-beta** *(current)* | Profile generator, signing keys, admin UI, CLI, tests, CI |
 | **0.2.0** | `dev.ucp.shopping.catalog` real endpoint (search + lookup) backed by `Magento_Catalog` |
 | **0.3.0** | `UCP-Agent` header parsing, platform profile fetching, capability intersection |
 | **0.4.0** | RFC 9421 HTTP Message Signatures for outgoing responses |
