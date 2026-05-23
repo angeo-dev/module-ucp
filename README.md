@@ -9,7 +9,7 @@
 
 Generates `/.well-known/ucp` at protocol version `2026-04-08` with ECDSA P-256 signing keys, declared capabilities, and proper cache headers — the discovery layer AI agents fetch first when interacting with your store.
 
-> **v0.1.0 is the profile-only release.** It exposes a valid UCP profile to AI platforms. The actual REST endpoints for catalog, cart, checkout and order land in later versions. Enabling a capability here adds it to the advertised profile but does NOT implement the matching endpoint — leave capabilities disabled in production until the matching endpoint module is installed.
+> **v0.1.0-beta is the profile-only release.** It exposes a valid UCP profile to AI platforms. The actual REST endpoints for catalog, cart, checkout and order land in later versions. Enabling a capability here adds it to the advertised profile but does NOT implement the matching endpoint — leave capabilities disabled in production until the matching endpoint module is installed. The module is tagged `0.1.0-beta` to signal pre-stable status under semver.
 
 ---
 
@@ -132,6 +132,8 @@ Prints a green pass if the profile is well-formed; non-zero exit on validation f
 
 All capability and transport settings are scoped to the **store view** — multi-store deployments can advertise different profiles per storefront.
 
+> **Multi-store on a single domain:** `/.well-known/ucp` is a single path on the host, so Magento's StoreResolver picks one store view to render it. If multiple store views share a host, the bare host resolves to one of them (typically the default), and that store's profile is what AI agents see. To advertise different UCP profiles per store, give each store its own hostname.
+
 ---
 
 ## CLI commands
@@ -197,7 +199,7 @@ CI runs the matrix PHP 8.2 / 8.3 / 8.4 on every push.
 
 | Version | Scope |
 | --- | --- |
-| **0.1.0** *(current)* | Profile generator, signing keys, admin UI, CLI, tests, CI |
+| **0.1.0-beta** *(current)* | Profile generator, signing keys, admin UI, CLI, tests, CI |
 | **0.2.0** | `dev.ucp.shopping.catalog` real endpoint (search + lookup) backed by `Magento_Catalog` |
 | **0.3.0** | `UCP-Agent` header parsing, platform profile fetching, capability intersection |
 | **0.4.0** | RFC 9421 HTTP Message Signatures for outgoing responses |

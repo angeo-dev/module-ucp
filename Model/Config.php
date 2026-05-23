@@ -11,12 +11,20 @@ namespace Angeo\Ucp\Model;
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Store\Model\ScopeInterface;
 use Magento\Store\Model\StoreManagerInterface;
+use Psr\Log\LoggerInterface;
 
 /**
  * Reads Angeo UCP admin configuration with safe defaults.
  *
  * All values are scoped to the current store view so multi-store setups
  * can advertise different capabilities per storefront.
+ *
+ * NOTE on multi-store on a single domain: /.well-known/ucp is served by
+ * a single Magento store view (the one Magento's StoreResolver picks for
+ * the bare host). If you run multiple stores on one domain and need
+ * different UCP profiles per store, you must either (a) front each store
+ * with its own hostname or (b) accept the default-store profile for the
+ * shared well-known path.
  */
 class Config
 {
@@ -33,7 +41,8 @@ class Config
 
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig,
-        private readonly StoreManagerInterface $storeManager
+        private readonly StoreManagerInterface $storeManager,
+        private readonly LoggerInterface $logger
     ) {
     }
 
@@ -84,7 +93,11 @@ class Config
 
         try {
             $baseUrl = $this->storeManager->getStore()->getBaseUrl();
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            $this->logger->error(
+                '[Angeo_Ucp] Failed to resolve store base URL for UCP endpoint: '
+                . $e->getMessage()
+            );
             return '';
         }
 
@@ -107,7 +120,11 @@ class Config
 
         try {
             $decoded = json_decode($stored, true, 8, JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
+        } catch (\JsonException $e) {
+            $this->logger->warning(
+                '[Angeo_Ucp] Stored UCP signing JWK is not valid JSON; '
+                . 'serving profile without signing_keys. Error: ' . $e->getMessage()
+            );
             return [];
         }
 
@@ -119,14 +136,27 @@ class Config
         // are stored public-only, but this guards against misconfig).
         $privateFields = ['d', 'p', 'q', 'dp', 'dq', 'qi'];
         $sanitized = [];
+        $hadPrivateMaterial = false;
         foreach ($decoded as $key) {
             if (!is_array($key)) {
                 continue;
             }
             foreach ($privateFields as $field) {
+                if (isset($key[$field])) {
+                    $hadPrivateMaterial = true;
+                }
                 unset($key[$field]);
             }
             $sanitized[] = $key;
+        }
+
+        if ($hadPrivateMaterial) {
+            $this->logger->warning(
+                '[Angeo_Ucp] Stored UCP signing key contained private fields '
+                . '(d/p/q/dp/dq/qi). These were stripped before serving the '
+                . 'profile, but you should rotate the affected key immediately: '
+                . 'bin/magento angeo:ucp:keys:generate --force.'
+            );
         }
 
         return $sanitized;

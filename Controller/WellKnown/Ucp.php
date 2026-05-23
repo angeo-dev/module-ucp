@@ -11,9 +11,6 @@ namespace Angeo\Ucp\Controller\WellKnown;
 use Angeo\Ucp\Api\ProfileGeneratorInterface;
 use Angeo\Ucp\Model\Config;
 use Magento\Framework\App\Action\HttpGetActionInterface;
-use Magento\Framework\App\ActionInterface;
-use Magento\Framework\App\Response\Http as HttpResponse;
-use Magento\Framework\App\ResponseInterface;
 use Magento\Framework\Controller\ResultFactory;
 use Magento\Framework\Controller\ResultInterface;
 use Psr\Log\LoggerInterface;
@@ -29,7 +26,7 @@ use Psr\Log\LoggerInterface;
  *  - return 404 when the module is disabled (treat as "this site does not
  *    advertise UCP" rather than misleading platforms with an empty profile)
  *
- * @see https://ucp.dev/latest/specification/overview/#hosting
+ * @see https://ucp.dev/2026-04-08/specification/overview/#hosting
  */
 class Ucp implements HttpGetActionInterface
 {
@@ -64,11 +61,12 @@ class Ucp implements HttpGetActionInterface
             $this->logger->error(
                 '[Angeo_Ucp] Profile JSON encoding failed: ' . $e->getMessage()
             );
-            return $this->resultFactory
-                ->create(ResultFactory::TYPE_RAW)
-                ->setHttpResponseCode(500)
-                ->setHeader('Content-Type', 'application/json', true)
-                ->setContents('{"error":"profile_generation_failed"}');
+            return $this->errorResponse();
+        } catch (\Throwable $e) {
+            $this->logger->error(
+                '[Angeo_Ucp] Profile generation failed: ' . $e->getMessage()
+            );
+            return $this->errorResponse();
         }
 
         return $this->resultFactory
@@ -82,5 +80,15 @@ class Ucp implements HttpGetActionInterface
             )
             ->setHeader('X-UCP-Version', Config::PROTOCOL_VERSION, true)
             ->setContents($body);
+    }
+
+    private function errorResponse(): ResultInterface
+    {
+        return $this->resultFactory
+            ->create(ResultFactory::TYPE_RAW)
+            ->setHttpResponseCode(500)
+            ->setHeader('Content-Type', 'application/json', true)
+            ->setHeader('Cache-Control', 'no-store', true)
+            ->setContents('{"error":"profile_generation_failed"}');
     }
 }

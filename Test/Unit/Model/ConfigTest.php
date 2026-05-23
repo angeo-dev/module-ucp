@@ -16,6 +16,8 @@ use Magento\Store\Model\StoreManagerInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 #[CoversClass(Config::class)]
 final class ConfigTest extends TestCase
@@ -45,6 +47,30 @@ final class ConfigTest extends TestCase
     }
 
     #[Test]
+    public function getPublicSigningKeys_logs_warning_when_private_fields_stripped(): void
+    {
+        $contaminatedJwk = [[
+            'kid' => 'leak-test',
+            'kty' => 'EC',
+            'crv' => 'P-256',
+            'x' => 'public-x',
+            'y' => 'public-y',
+            'd' => 'PRIVATE',
+        ]];
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects(self::once())
+            ->method('warning')
+            ->with(self::stringContains('private fields'));
+
+        $config = $this->buildConfig(
+            jwkJson: json_encode($contaminatedJwk),
+            logger: $logger
+        );
+
+        $config->getPublicSigningKeys();
+    }
+
+    #[Test]
     public function getPublicSigningKeys_returns_empty_array_for_blank_config(): void
     {
         $config = $this->buildConfig(jwkJson: '');
@@ -55,7 +81,10 @@ final class ConfigTest extends TestCase
     #[Test]
     public function getPublicSigningKeys_returns_empty_array_for_invalid_json(): void
     {
-        $config = $this->buildConfig(jwkJson: '{not valid json');
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects(self::once())->method('warning');
+
+        $config = $this->buildConfig(jwkJson: '{not valid json', logger: $logger);
 
         self::assertSame([], $config->getPublicSigningKeys());
     }
@@ -82,10 +111,32 @@ final class ConfigTest extends TestCase
         self::assertSame('https://ucp.example.com/api/v2', $config->getRestEndpoint());
     }
 
+    #[Test]
+    public function getRestEndpoint_returns_empty_and_logs_when_store_resolution_throws(): void
+    {
+        $storeManager = $this->createStub(StoreManagerInterface::class);
+        $storeManager->method('getStore')
+            ->willThrowException(new \RuntimeException('no store'));
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects(self::once())
+            ->method('error')
+            ->with(self::stringContains('store base URL'));
+
+        $config = $this->buildConfig(
+            endpoint: '',
+            storeManager: $storeManager,
+            logger: $logger
+        );
+
+        self::assertSame('', $config->getRestEndpoint());
+    }
+
     private function buildConfig(
         string $jwkJson = '',
         string $endpoint = '',
-        ?StoreManagerInterface $storeManager = null
+        ?StoreManagerInterface $storeManager = null,
+        ?LoggerInterface $logger = null
     ): Config {
         $scopeConfig = $this->createStub(ScopeConfigInterface::class);
         $scopeConfig->method('getValue')->willReturnCallback(
@@ -100,7 +151,8 @@ final class ConfigTest extends TestCase
         $scopeConfig->method('isSetFlag')->willReturn(false);
 
         $storeManager ??= $this->createStub(StoreManagerInterface::class);
+        $logger ??= new NullLogger();
 
-        return new Config($scopeConfig, $storeManager);
+        return new Config($scopeConfig, $storeManager, $logger);
     }
 }

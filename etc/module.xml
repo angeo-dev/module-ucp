@@ -9,6 +9,7 @@
         xsi:noNamespaceSchemaLocation="urn:magento:framework:Module/etc/module.xsd">
     <module name="Angeo_Ucp">
         <sequence>
+            <module name="Magento_Store"/>
             <module name="Magento_Config"/>
             <module name="Magento_Backend"/>
         </sequence>
