@@ -24,9 +24,10 @@
                    showInDefault="1" showInWebsite="1" showInStore="1">
                 <label>General</label>
                 <comment><![CDATA[
-                    Configures the UCP profile served at
+                    Configures the UCP business profile served at
                     <code>/.well-known/ucp</code>. Protocol version
-                    <code>2026-04-08</code>.
+                    <code>2026-04-08</code>. Profile structure verified against
+                    <a href="https://ucp.dev/2026-04-08/specification/overview/" target="_blank">ucp.dev</a>.
                 ]]></comment>
                 <field id="enabled" translate="label comment"
                        type="select" sortOrder="10"
@@ -44,39 +45,81 @@
             <group id="capabilities" translate="label comment"
                    type="text" sortOrder="20"
                    showInDefault="1" showInWebsite="1" showInStore="1">
-                <label>Declared Capabilities</label>
+                <label>Declared Root Capabilities</label>
                 <comment><![CDATA[
-                    <strong>v0.1.0 is a profile-only release.</strong>
-                    Enabling a capability here ONLY adds it to the advertised
-                    profile — the actual REST endpoints are not implemented yet.
-                    Real catalog/cart/checkout endpoints land in v0.2.0+.
-                    Leave all capabilities disabled in production until the
-                    matching endpoint module is installed.
+                    <strong>This module advertises capabilities; it does not
+                    implement the matching REST endpoints.</strong> Only enable
+                    a capability when the corresponding endpoint implementation
+                    is installed and reachable at the configured Transport
+                    endpoint. Advertising an unimplemented capability will cause
+                    AI platforms to send requests that fail.
                 ]]></comment>
-                <field id="catalog_enabled" translate="label" type="select" sortOrder="10"
+                <field id="catalog_search_enabled" translate="label comment" type="select" sortOrder="10"
                        showInDefault="1" showInWebsite="1" showInStore="1">
-                    <label>Catalog (dev.ucp.shopping.catalog)</label>
+                    <label>Catalog Search (dev.ucp.shopping.catalog.search)</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment>Free-text product search with filters.</comment>
                 </field>
-                <field id="cart_enabled" translate="label" type="select" sortOrder="20"
+                <field id="catalog_lookup_enabled" translate="label comment" type="select" sortOrder="20"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Catalog Lookup (dev.ucp.shopping.catalog.lookup)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment>Batch product/variant retrieval by identifier.</comment>
+                </field>
+                <field id="cart_enabled" translate="label" type="select" sortOrder="30"
                        showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Cart (dev.ucp.shopping.cart)</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                 </field>
-                <field id="checkout_enabled" translate="label" type="select" sortOrder="30"
+                <field id="checkout_enabled" translate="label" type="select" sortOrder="40"
                        showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Checkout (dev.ucp.shopping.checkout)</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                 </field>
-                <field id="order_enabled" translate="label" type="select" sortOrder="40"
+                <field id="order_enabled" translate="label" type="select" sortOrder="50"
                        showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Order (dev.ucp.shopping.order)</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                 </field>
-                <field id="identity_linking_enabled" translate="label" type="select" sortOrder="50"
+                <field id="identity_linking_enabled" translate="label" type="select" sortOrder="60"
                        showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Identity Linking (dev.ucp.common.identity_linking)</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+                <field id="identity_linking_scopes" translate="label comment" type="text" sortOrder="70"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Identity Linking OAuth Scopes</label>
+                    <comment><![CDATA[
+                        Comma-separated scope list advertised in
+                        <code>config.scopes</code>, e.g.
+                        <code>dev.ucp.shopping.order:read, dev.ucp.shopping.order:manage</code>.
+                        Leave blank to omit the config block.
+                    ]]></comment>
+                    <depends><field id="identity_linking_enabled">1</field></depends>
+                </field>
+            </group>
+
+            <group id="extensions" translate="label comment"
+                   type="text" sortOrder="25"
+                   showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>Declared Extensions</label>
+                <comment><![CDATA[
+                    Extensions augment a parent capability via the
+                    <code>extends</code> field. Per spec, an extension is never
+                    advertised when its parent capability is disabled (it would
+                    be pruned during negotiation anyway).
+                ]]></comment>
+                <field id="fulfillment_enabled" translate="label comment" type="select" sortOrder="10"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Fulfillment (dev.ucp.shopping.fulfillment)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment>Extends Checkout. Only advertised when Checkout is enabled.</comment>
+                </field>
+                <field id="discount_enabled" translate="label comment" type="select" sortOrder="20"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Discount (dev.ucp.shopping.discount)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment>Extends Checkout and/or Cart. Only advertised when at least one parent is enabled.</comment>
                 </field>
             </group>
 
@@ -89,8 +132,8 @@
                     <comment><![CDATA[
                         Base URL for the dev.ucp.shopping REST service. Leave
                         blank to use <code>{baseUrl}/rest/V1/ucp</code>.
-                        Override only if you front the UCP API with a separate
-                        host or path.
+                        Must be HTTPS; must not end with a trailing slash
+                        (trailing slashes are stripped automatically).
                     ]]></comment>
                 </field>
             </group>
@@ -111,6 +154,36 @@
                         know what you are doing — manual edits can desync from the
                         private PEM in env.php.
                     </comment>
+                </field>
+            </group>
+
+            <group id="advanced" translate="label comment" type="text" sortOrder="50"
+                   showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>Advanced Profile Declarations</label>
+                <comment><![CDATA[
+                    Optional spec features for advanced deployments. Invalid
+                    JSON is ignored with a warning in <code>system.log</code>.
+                ]]></comment>
+                <field id="supported_versions" translate="label comment" type="textarea" sortOrder="10"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Supported Versions (JSON)</label>
+                    <comment><![CDATA[
+                        Map of older protocol versions to version-specific
+                        profile URIs, e.g.
+                        <code>{"2026-01-23": "https://yourstore.com/ucp/profiles/2026-01-23.json"}</code>.
+                        Keys must be YYYY-MM-DD; URIs must be HTTPS.
+                    ]]></comment>
+                </field>
+                <field id="payment_handlers" translate="label comment" type="textarea" sortOrder="20"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Payment Handlers (JSON)</label>
+                    <comment><![CDATA[
+                        Raw <code>payment_handlers</code> object per the UCP
+                        spec, keyed by reverse-domain handler name. Only declare
+                        handlers your checkout integration actually supports.
+                        Do <strong>not</strong> place secret keys here — handler
+                        config in the profile is public.
+                    ]]></comment>
                 </field>
             </group>
         </section>

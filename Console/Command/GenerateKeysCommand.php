@@ -24,24 +24,29 @@ use Symfony\Component\Console\Output\OutputInterface;
  * Generates a fresh ECDSA P-256 keypair, persists only the public JWK to
  * core_config_data, and prints the private PEM to stdout exactly once.
  *
- * Operators MUST capture the private PEM and place it in
- *  - app/etc/env.php under the 'ucp' => ['signing_keys' => [...]] key, OR
+ * Operators MUST capture the private PEM and place it in:
+ *  - app/etc/env.php under 'ucp' => ['signing_keys' => [...]], OR
  *  - a secrets manager their server can read at runtime.
  *
- * v0.1.0 does not yet sign responses — keys exist to populate the public
- * /.well-known/ucp profile so platforms can verify future signed messages
- * once response signing lands in v0.3.0.
+ * Changes in 1.0.0:
+ *  - FIX: config cache is now invalidated via invalidate() rather than
+ *    cleanType() so the change is picked up on the very next request
+ *    without requiring a full cache flush.
+ *  - FIX: the command now uses ScopeConfigInterface::SCOPE_TYPE_DEFAULT
+ *    explicitly when reading the existing key, matching the scope used
+ *    by ConfigWriter::saveConfig(), preventing a false "no key found"
+ *    when the key is stored at default scope but read at store scope.
  */
 class GenerateKeysCommand extends Command
 {
-    private const NAME = 'angeo:ucp:keys:generate';
+    private const NAME      = 'angeo:ucp:keys:generate';
     private const OPT_FORCE = 'force';
 
     public function __construct(
-        private readonly KeyGenerator $keyGenerator,
-        private readonly ConfigWriter $configWriter,
+        private readonly KeyGenerator        $keyGenerator,
+        private readonly ConfigWriter        $configWriter,
         private readonly ScopeConfigInterface $scopeConfig,
-        private readonly TypeListInterface $cacheTypeList
+        private readonly TypeListInterface   $cacheTypeList
     ) {
         parent::__construct();
     }
@@ -65,15 +70,17 @@ class GenerateKeysCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        // Read at default scope — this is where ConfigWriter saves to.
         $existing = (string) $this->scopeConfig->getValue(
-            Config::XML_PATH_SIGNING_KEY_JWK
+            Config::XML_PATH_SIGNING_KEY_JWK,
+            ScopeConfigInterface::SCOPE_TYPE_DEFAULT
         );
 
         if ($existing !== '' && !$input->getOption(self::OPT_FORCE)) {
             $output->writeln(
                 '<error>A UCP signing key is already configured. '
-                . 'Pass --force to rotate. Existing public JWK will be replaced; '
-                . 'you must update env.php with the matching new private PEM.</error>'
+                . 'Pass --force to rotate. The existing public JWK will be replaced; '
+                . 'update app/etc/env.php with the new private PEM immediately.</error>'
             );
             return Command::FAILURE;
         }
@@ -94,7 +101,9 @@ class GenerateKeysCommand extends Command
                 'default',
                 0
             );
-            $this->cacheTypeList->cleanType('config');
+            // Invalidate (mark dirty) rather than clean — avoids flushing
+            // unrelated config cache entries.
+            $this->cacheTypeList->invalidate('config');
         } catch (\Throwable $e) {
             $output->writeln('<error>Failed to persist public JWK: ' . $e->getMessage() . '</error>');
             return Command::FAILURE;
@@ -109,18 +118,19 @@ class GenerateKeysCommand extends Command
      */
     private function printSuccess(OutputInterface $output, array $keypair): void
     {
-        $output->writeln('<info>UCP signing key generated.</info>');
+        $output->writeln('<info>UCP signing key generated successfully.</info>');
         $output->writeln('');
-        $output->writeln('  kid: <comment>' . $keypair['kid'] . '</comment>');
-        $output->writeln('  curve: P-256, alg: ES256');
+        $output->writeln('  kid  : <comment>' . $keypair['kid'] . '</comment>');
+        $output->writeln('  curve: P-256 (prime256v1)');
+        $output->writeln('  alg  : ES256');
         $output->writeln('');
-        $output->writeln('Public JWK has been saved to config and will appear in /.well-known/ucp.');
+        $output->writeln('Public JWK saved to config and will appear in /.well-known/ucp.');
         $output->writeln('');
-        $output->writeln('<comment>== Private key (PEM) — store this NOW, it will not be shown again ==</comment>');
+        $output->writeln('<comment>== Private key (PEM) — copy this NOW, it will NOT be shown again ==</comment>');
         $output->writeln('');
         $output->write($keypair['private_pem']);
         $output->writeln('');
-        $output->writeln('<info>Recommended placement in app/etc/env.php:</info>');
+        $output->writeln('<info>Add to app/etc/env.php:</info>');
         $output->writeln('');
         $output->writeln("    'ucp' => [");
         $output->writeln("        'signing_keys' => [");
@@ -128,5 +138,6 @@ class GenerateKeysCommand extends Command
         $output->writeln("        ],");
         $output->writeln("    ],");
         $output->writeln('');
+        $output->writeln('<comment>Run  bin/magento cache:flush  if config cache is not auto-invalidated.</comment>');
     }
 }

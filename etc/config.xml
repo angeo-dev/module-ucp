@@ -13,18 +13,28 @@
                 <enabled>0</enabled>
             </general>
             <capabilities>
-                <catalog_enabled>0</catalog_enabled>
+                <catalog_search_enabled>0</catalog_search_enabled>
+                <catalog_lookup_enabled>0</catalog_lookup_enabled>
                 <cart_enabled>0</cart_enabled>
                 <checkout_enabled>0</checkout_enabled>
                 <order_enabled>0</order_enabled>
                 <identity_linking_enabled>0</identity_linking_enabled>
+                <identity_linking_scopes></identity_linking_scopes>
             </capabilities>
+            <extensions>
+                <fulfillment_enabled>0</fulfillment_enabled>
+                <discount_enabled>0</discount_enabled>
+            </extensions>
             <transport>
                 <rest_endpoint></rest_endpoint>
             </transport>
             <keys>
                 <signing_key_jwk></signing_key_jwk>
             </keys>
+            <advanced>
+                <supported_versions></supported_versions>
+                <payment_handlers></payment_handlers>
+            </advanced>
         </angeo_ucp>
     </default>
 </config>

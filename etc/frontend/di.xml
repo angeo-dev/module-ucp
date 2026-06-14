@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright (c) 2026 Ievgenii Gryshkun (angeo.dev)
+ * MIT License — see LICENSE for full terms.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+
+    <!--
+        The custom router MUST be registered in the FRONTEND area's RouterList,
+        not the global etc/di.xml. The "standard" frontend RouterList is a
+        frontend-scoped instance; a RouterList argument placed in global di.xml
+        is not reliably applied to it (the router's match() then never runs and
+        the request falls through to the CMS router -> HTTP 404). Registering it
+        here, in etc/frontend/di.xml, is what actually wires the router into
+        frontend routing.
+    -->
+    <type name="Magento\Framework\App\RouterList">
+        <arguments>
+            <argument name="routerList" xsi:type="array">
+                <item name="angeoUcpWellKnown" xsi:type="array">
+                    <item name="class" xsi:type="string">Angeo\Ucp\Controller\Router</item>
+                    <item name="disable" xsi:type="boolean">false</item>
+                    <item name="sortOrder" xsi:type="string">22</item>
+                </item>
+            </argument>
+        </arguments>
+    </type>
+</config>

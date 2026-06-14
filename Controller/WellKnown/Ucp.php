@@ -19,12 +19,19 @@ use Psr\Log\LoggerInterface;
  * Serves /.well-known/ucp.
  *
  * Response MUST:
- *  - be served over HTTPS (handled by web server)
+ *  - be served over HTTPS (enforced at web-server level)
  *  - return Content-Type: application/json
- *  - return Cache-Control with public + max-age >= 60 (per UCP spec)
+ *  - return Cache-Control with public + max-age >= 60 (per UCP spec §hosting)
  *  - NOT use 3xx redirects (handled by web server)
  *  - return 404 when the module is disabled (treat as "this site does not
  *    advertise UCP" rather than misleading platforms with an empty profile)
+ *
+ * Security notes (1.0.0):
+ *  - Security headers (X-Content-Type-Options, X-Frame-Options, etc.) are
+ *    added to all responses to comply with standard hardening practices.
+ *  - Rate-limiting is the responsibility of the operator's reverse proxy /
+ *    WAF; this endpoint has no authentication and should be fronted with
+ *    appropriate rate-limit rules in production.
  *
  * @see https://ucp.dev/2026-04-08/specification/overview/#hosting
  */
@@ -33,27 +40,22 @@ class Ucp implements HttpGetActionInterface
     private const CACHE_MAX_AGE = 300;
 
     public function __construct(
-        private readonly ResultFactory $resultFactory,
+        private readonly ResultFactory            $resultFactory,
         private readonly ProfileGeneratorInterface $profileGenerator,
-        private readonly Config $config,
-        private readonly LoggerInterface $logger
+        private readonly Config                   $config,
+        private readonly LoggerInterface          $logger
     ) {
     }
 
     public function execute(): ResultInterface
     {
         if (!$this->config->isEnabled()) {
-            return $this->resultFactory
-                ->create(ResultFactory::TYPE_RAW)
-                ->setHttpResponseCode(404)
-                ->setHeader('Content-Type', 'application/json', true)
-                ->setHeader('Cache-Control', 'no-store', true)
-                ->setContents('{"error":"ucp_not_advertised"}');
+            return $this->buildResponse(404, 'no-store', '{"error":"ucp_not_advertised"}');
         }
 
         try {
             $profile = $this->profileGenerator->generate();
-            $body = json_encode(
+            $body    = json_encode(
                 $profile,
                 JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
             );
@@ -61,34 +63,52 @@ class Ucp implements HttpGetActionInterface
             $this->logger->error(
                 '[Angeo_Ucp] Profile JSON encoding failed: ' . $e->getMessage()
             );
-            return $this->errorResponse();
+            return $this->buildResponse(500, 'no-store', '{"error":"profile_generation_failed"}');
         } catch (\Throwable $e) {
             $this->logger->error(
                 '[Angeo_Ucp] Profile generation failed: ' . $e->getMessage()
             );
-            return $this->errorResponse();
+            return $this->buildResponse(500, 'no-store', '{"error":"profile_generation_failed"}');
         }
 
-        return $this->resultFactory
-            ->create(ResultFactory::TYPE_RAW)
-            ->setHttpResponseCode(200)
-            ->setHeader('Content-Type', 'application/json', true)
-            ->setHeader(
-                'Cache-Control',
-                'public, max-age=' . self::CACHE_MAX_AGE,
-                true
-            )
-            ->setHeader('X-UCP-Version', Config::PROTOCOL_VERSION, true)
-            ->setContents($body);
+        return $this->buildResponse(
+            200,
+            'public, max-age=' . self::CACHE_MAX_AGE,
+            $body,
+            ['X-UCP-Version' => Config::PROTOCOL_VERSION]
+        );
     }
 
-    private function errorResponse(): ResultInterface
-    {
-        return $this->resultFactory
+    /**
+     * Build a raw JSON response with consistent security headers.
+     *
+     * @param array<string, string> $extraHeaders
+     */
+    private function buildResponse(
+        int    $httpCode,
+        string $cacheControl,
+        string $body,
+        array  $extraHeaders = []
+    ): ResultInterface {
+        $result = $this->resultFactory
             ->create(ResultFactory::TYPE_RAW)
-            ->setHttpResponseCode(500)
+            ->setHttpResponseCode($httpCode)
             ->setHeader('Content-Type', 'application/json', true)
-            ->setHeader('Cache-Control', 'no-store', true)
-            ->setContents('{"error":"profile_generation_failed"}');
+            ->setHeader('Cache-Control', $cacheControl, true)
+            // CORS — the UCP profile is fetched cross-origin by AI agents, so the
+            // spec requires it to be publicly readable from any origin.
+            ->setHeader('Access-Control-Allow-Origin', '*', true)
+            ->setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS', true)
+            // Security hardening headers — added in 1.0.0.
+            ->setHeader('X-Content-Type-Options', 'nosniff', true)
+            ->setHeader('X-Frame-Options', 'DENY', true)
+            ->setHeader('Referrer-Policy', 'no-referrer', true)
+            ->setContents($body);
+
+        foreach ($extraHeaders as $name => $value) {
+            $result->setHeader($name, $value, true);
+        }
+
+        return $result;
     }
 }

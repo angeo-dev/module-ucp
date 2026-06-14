@@ -45,9 +45,7 @@ class Router implements RouterInterface
             return null;
         }
 
-        $path = '/' . trim((string) $request->getPathInfo(), '/');
-
-        if ($path !== self::WELL_KNOWN_PATH) {
+        if (!$this->isWellKnownUcp($request)) {
             return null;
         }
 
@@ -58,5 +56,40 @@ class Router implements RouterInterface
         return $this->actionFactory->create(
             \Angeo\Ucp\Controller\WellKnown\Ucp::class
         );
+    }
+
+    /**
+     * Robustly decide whether the request targets /.well-known/ucp.
+     *
+     * Different web servers populate the path differently. On nginx/Apache
+     * getPathInfo() is reliable, but LiteSpeed (Hostinger) often leaves
+     * PATH_INFO empty for dot-segment paths, so getPathInfo() returns the wrong
+     * value and a strict comparison fails — which is why the endpoint 404'd
+     * there. We therefore check several path sources and accept a match from
+     * any of them.
+     */
+    private function isWellKnownUcp(HttpRequest $request): bool
+    {
+        $candidates = [
+            (string) $request->getPathInfo(),
+            (string) $request->getOriginalPathInfo(),
+            (string) $request->getRequestUri(),
+        ];
+
+        foreach ($candidates as $raw) {
+            if ($raw === '') {
+                continue;
+            }
+
+            // Drop query string and fragment, normalise slashes.
+            $path = (string) parse_url($raw, PHP_URL_PATH);
+            $path = '/' . trim($path, '/');
+
+            if ($path === self::WELL_KNOWN_PATH) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

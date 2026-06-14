@@ -9,42 +9,25 @@
         xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
 
     <!--
-        Register Angeo\Ucp\Controller\Router as a standard router that catches
-        /.well-known/ucp. SortOrder=22 places it before the CMS router (60) and
-        after the standard router (20), so well-known requests don't hit CMS 404.
-    -->
-    <type name="Magento\Framework\App\RouterList">
-        <arguments>
-            <argument name="routerList" xsi:type="array">
-                <item name="angeo_ucp_wellknown" xsi:type="array">
-                    <item name="class" xsi:type="string">Angeo\Ucp\Controller\Router</item>
-                    <item name="disable" xsi:type="boolean">false</item>
-                    <item name="sortOrder" xsi:type="string">22</item>
-                </item>
-            </argument>
-        </arguments>
-    </type>
-
-    <!--
-        Wire ProfileGeneratorInterface to its default implementation.
+        Bind the ProfileGenerator interface to its implementation. The
+        controller and the validate CLI depend on the interface.
     -->
     <preference for="Angeo\Ucp\Api\ProfileGeneratorInterface"
                 type="Angeo\Ucp\Model\ProfileGenerator"/>
 
     <!--
-        Register CLI commands.
+        NOTE: the custom router is registered in etc/frontend/di.xml, NOT here.
+        The frontend "standard" RouterList is frontend-scoped; registering the
+        router in global di.xml does not reliably wire it into frontend routing.
     -->
+
+    <!-- CLI commands. -->
     <type name="Magento\Framework\Console\CommandList">
         <arguments>
             <argument name="commands" xsi:type="array">
-                <item name="angeo_ucp_keys_generate" xsi:type="object">
-                    Angeo\Ucp\Console\Command\GenerateKeysCommand
-                </item>
-                <item name="angeo_ucp_validate" xsi:type="object">
-                    Angeo\Ucp\Console\Command\ValidateProfileCommand
-                </item>
+                <item name="angeo_ucp_keys_generate" xsi:type="object">Angeo\Ucp\Console\Command\GenerateKeysCommand</item>
+                <item name="angeo_ucp_validate" xsi:type="object">Angeo\Ucp\Console\Command\ValidateProfileCommand</item>
             </argument>
         </arguments>
     </type>
-
 </config>

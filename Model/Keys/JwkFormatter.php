@@ -9,27 +9,39 @@ declare(strict_types=1);
 namespace Angeo\Ucp\Model\Keys;
 
 /**
- * Converts ECDSA P-256 keypairs from OpenSSL into JWK (JSON Web Key) format
- * per RFC 7517 + RFC 7518.
+ * Converts ECDSA P-256 public keys from OpenSSL into JWK (JSON Web Key)
+ * format per RFC 7517 + RFC 7518.
  *
- * UCP signing keys use ES256 (ECDSA on P-256 with SHA-256) by default.
+ * UCP signing keys use ES256 (ECDSA on P-256 with SHA-256).
+ *
+ * Changes in 1.0.0:
+ *  - Truncation guard added: coordinates longer than 32 bytes are now
+ *    rejected (previously only short coordinates were padded; an over-long
+ *    coordinate from a malformed key would be silently included).
+ *  - kid is validated to be a non-empty string before being embedded.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc7517
  * @see https://datatracker.ietf.org/doc/html/rfc7518#section-6.2
  */
 class JwkFormatter
 {
-    private const COORDINATE_BYTES = 32; // P-256 uses 32-byte coordinates.
+    /** P-256 coordinates are exactly 32 bytes. */
+    private const COORDINATE_BYTES = 32;
 
     /**
      * Format the public half of a P-256 EC key as a JWK.
      *
      * @param string $publicPem PEM-encoded EC public key.
-     * @param string $kid       Key identifier to embed.
+     * @param string $kid       Key identifier to embed (must be non-empty).
      * @return array<string, string> JWK fields: kid, kty, crv, x, y, use, alg.
+     * @throws \RuntimeException on invalid input.
      */
     public function publicKeyToJwk(string $publicPem, string $kid): array
     {
+        if ($kid === '') {
+            throw new \RuntimeException('JWK kid must not be empty.');
+        }
+
         $key = openssl_pkey_get_public($publicPem);
         if ($key === false) {
             throw new \RuntimeException(
@@ -46,7 +58,7 @@ class JwkFormatter
 
         if (($details['ec']['curve_name'] ?? '') !== 'prime256v1') {
             throw new \RuntimeException(sprintf(
-                'Unsupported curve "%s". UCP v0.1.0 requires prime256v1 (P-256).',
+                'Unsupported curve "%s". UCP v1.0.0 requires prime256v1 (P-256).',
                 $details['ec']['curve_name'] ?? 'unknown'
             ));
         }
@@ -62,24 +74,41 @@ class JwkFormatter
             'kid' => $kid,
             'kty' => 'EC',
             'crv' => 'P-256',
-            'x' => $this->base64UrlEncode($this->padCoordinate($x)),
-            'y' => $this->base64UrlEncode($this->padCoordinate($y)),
+            'x'   => $this->base64UrlEncode($this->normaliseCoordinate($x, 'x')),
+            'y'   => $this->base64UrlEncode($this->normaliseCoordinate($y, 'y')),
             'use' => 'sig',
             'alg' => 'ES256',
         ];
     }
 
     /**
-     * Left-pad an EC coordinate to the curve's fixed byte width so that
-     * different keys produce stable, comparable JWK encodings.
+     * Normalise a P-256 coordinate to exactly COORDINATE_BYTES bytes.
+     *
+     * Left-pads short values (e.g. a leading-zero coordinate that OpenSSL
+     * returns with the zero stripped). Rejects over-long values rather than
+     * silently truncating them, because truncation would produce an invalid key.
+     *
+     * @throws \RuntimeException if the coordinate is longer than expected.
      */
-    private function padCoordinate(string $raw): string
+    private function normaliseCoordinate(string $raw, string $name): string
     {
-        if (strlen($raw) >= self::COORDINATE_BYTES) {
-            return $raw;
+        $len = strlen($raw);
+
+        if ($len > self::COORDINATE_BYTES) {
+            throw new \RuntimeException(sprintf(
+                'EC coordinate "%s" is %d bytes; expected at most %d for P-256. '
+                . 'The supplied key may not be a valid P-256 key.',
+                $name,
+                $len,
+                self::COORDINATE_BYTES
+            ));
         }
 
-        return str_repeat("\0", self::COORDINATE_BYTES - strlen($raw)) . $raw;
+        if ($len < self::COORDINATE_BYTES) {
+            return str_repeat("\0", self::COORDINATE_BYTES - $len) . $raw;
+        }
+
+        return $raw;
     }
 
     /**

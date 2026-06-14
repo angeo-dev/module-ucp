@@ -21,8 +21,7 @@ final class JwkFormatterTest extends TestCase
     private JwkFormatter $formatter;
 
     /**
-     * Fresh keypair generated once per test class for performance —
-     * key generation is the slow part.
+     * Fresh keypair generated once per test class for performance.
      *
      * @var array{private: string, public: string}
      */
@@ -32,7 +31,7 @@ final class JwkFormatterTest extends TestCase
     {
         $resource = openssl_pkey_new([
             'private_key_type' => OPENSSL_KEYTYPE_EC,
-            'curve_name' => 'prime256v1',
+            'curve_name'       => 'prime256v1',
         ]);
 
         if ($resource === false) {
@@ -44,7 +43,7 @@ final class JwkFormatterTest extends TestCase
 
         self::$keypair = [
             'private' => (string) $privatePem,
-            'public' => (string) $details['key'],
+            'public'  => (string) $details['key'],
         ];
     }
 
@@ -72,7 +71,6 @@ final class JwkFormatterTest extends TestCase
     {
         $jwk = $this->formatter->publicKeyToJwk(self::$keypair['public'], 'kid');
 
-        // Base64URL alphabet: A–Z, a–z, 0–9, -, _; no =, +, /.
         self::assertMatchesRegularExpression('/^[A-Za-z0-9_-]+$/', $jwk['x']);
         self::assertMatchesRegularExpression('/^[A-Za-z0-9_-]+$/', $jwk['y']);
         self::assertStringNotContainsString('=', $jwk['x']);
@@ -96,7 +94,6 @@ final class JwkFormatterTest extends TestCase
     {
         $jwk = $this->formatter->publicKeyToJwk(self::$keypair['public'], 'kid');
 
-        // RFC 7518 private fields for EC keys.
         self::assertArrayNotHasKey('d', $jwk);
     }
 
@@ -112,7 +109,6 @@ final class JwkFormatterTest extends TestCase
     #[Test]
     public function rejects_non_ec_key(): void
     {
-        // Generate an RSA key — different kty, should be refused.
         $rsa = openssl_pkey_new([
             'private_key_type' => OPENSSL_KEYTYPE_RSA,
             'private_key_bits' => 2048,
@@ -120,18 +116,27 @@ final class JwkFormatterTest extends TestCase
         if ($rsa === false) {
             self::markTestSkipped('Cannot generate RSA test key.');
         }
-        $details = openssl_pkey_get_details($rsa);
-        $rsaPublicPem = (string) $details['key'];
+        $details   = openssl_pkey_get_details($rsa);
+        $rsaPublic = (string) $details['key'];
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessageMatches('/not an EC key/');
 
-        $this->formatter->publicKeyToJwk($rsaPublicPem, 'kid');
+        $this->formatter->publicKeyToJwk($rsaPublic, 'kid');
+    }
+
+    #[Test]
+    public function rejects_empty_kid(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/kid must not be empty/');
+
+        $this->formatter->publicKeyToJwk(self::$keypair['public'], '');
     }
 
     private static function base64UrlDecode(string $value): string
     {
-        $padded = $value . str_repeat('=', (4 - strlen($value) % 4) % 4);
+        $padded  = $value . str_repeat('=', (4 - strlen($value) % 4) % 4);
         $decoded = base64_decode(strtr($padded, '-_', '+/'), true);
         if ($decoded === false) {
             throw new \RuntimeException('Invalid base64url string in test.');
