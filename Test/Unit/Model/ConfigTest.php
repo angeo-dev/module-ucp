@@ -277,6 +277,53 @@ final class ConfigTest extends TestCase
     }
 
     #[Test]
+    public function getPaymentHandlers_skips_entries_missing_id_or_version(): void
+    {
+        // Schema: payment_handler.json requires `id`; ucp.json entity
+        // requires `version` (YYYY-MM-DD). Entries lacking either are
+        // dropped so the served profile always validates.
+        $json = '{"com.example.tokenizer": ['
+            . '{"id": "ok", "version": "2026-04-08"},'
+            . '{"version": "2026-04-08"},'
+            . '{"id": "bad_version", "version": "v1"}'
+            . ']}';
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects(self::exactly(2))->method('warning');
+
+        $config   = $this->buildConfig(paymentHandlers: $json, logger: $logger);
+        $handlers = $config->getPaymentHandlers();
+
+        self::assertCount(1, $handlers['com.example.tokenizer']);
+        self::assertSame('ok', $handlers['com.example.tokenizer'][0]['id']);
+    }
+
+    #[Test]
+    public function getPaymentHandlers_rejects_non_reverse_domain_keys(): void
+    {
+        $json = '{"NotReverseDomain": [{"id": "t1", "version": "2026-04-08"}]}';
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects(self::once())
+            ->method('warning')
+            ->with(self::stringContains('reverse-domain'));
+
+        $config = $this->buildConfig(paymentHandlers: $json, logger: $logger);
+
+        self::assertSame([], $config->getPaymentHandlers());
+    }
+
+    #[Test]
+    public function getPaymentHandlers_wraps_single_entry_object_into_list(): void
+    {
+        $json   = '{"com.example.pay": {"id": "t1", "version": "2026-04-08"}}';
+        $config = $this->buildConfig(paymentHandlers: $json);
+
+        $handlers = $config->getPaymentHandlers();
+
+        self::assertTrue(array_is_list($handlers['com.example.pay']));
+        self::assertSame('t1', $handlers['com.example.pay'][0]['id']);
+    }
+
+    #[Test]
     public function getPaymentHandlers_rejects_json_array_with_warning(): void
     {
         $logger = $this->createMock(LoggerInterface::class);

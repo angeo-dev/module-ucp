@@ -4,6 +4,131 @@ All notable changes to `angeo/module-ucp` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-04
+
+Extensibility release: multi-transport service bindings and automated
+schema-drift detection. Spec version 2026-04-08 remains the latest UCP
+release; the official roadmap signals Lodging and Food verticals next, so
+the services registry is now open for extension without core changes.
+
+### Added
+
+- **MCP transport binding.** New admin field *Transport → MCP Endpoint URL*
+  (`angeo_ucp/transport/mcp_endpoint`). When set, the profile advertises an
+  additional `mcp` binding for `dev.ucp.shopping` alongside REST — per
+  `schemas/service.json`, each transport binding is a separate entry in the
+  same service array, and `mcp` (like `rest`) REQUIRES an `endpoint` in
+  business profiles. The MCP endpoint is opt-in only and never derived from
+  the store base URL: an MCP server (e.g. `angeo/module-mcp-server`'s
+  Streamable HTTP endpoint) is separate infrastructure.
+- **`Api\ServiceBindingProviderInterface` (@api) + DI provider pool.**
+  `ProfileGenerator` no longer hardcodes the services registry; it merges
+  registry fragments from a di.xml-configured pool
+  (`serviceBindingProviders`). Built-in providers:
+  `Model\Service\RestShoppingBindingProvider` (extracted, behavior
+  unchanged) and `Model\Service\McpShoppingBindingProvider`. Third-party
+  modules — a future catalog implementation, additional transports, or the
+  upcoming Lodging/Food verticals — contribute bindings via their own
+  di.xml without touching this module. Malformed fragments
+  (non-reverse-domain keys, non-list values) are dropped defensively.
+- **CI schema validation** (`.github/workflows/schema-validation.yml` +
+  `dev/schema-validation/`). Fixture profiles are generated through the
+  real module code (framework interfaces stubbed, no Magento install
+  needed) and validated against the OFFICIAL JSON Schemas at the pinned
+  spec tag on every push/PR and weekly. When the next dated spec release
+  lands, bumping `UCP_SPEC_TAG` immediately reveals any schema drift.
+  Fixtures cover: full profile (REST + MCP), minimal, MCP-only, and the
+  orphan-extension pruning case.
+
+### Changed
+
+- `Config::getRestEndpoint()` / `getMcpEndpoint()` trim surrounding
+  whitespace from configured values, preventing a whitespace-only value
+  from being advertised as an endpoint.
+- `dev.ucp.shopping` service name centralised as
+  `Config::SHOPPING_SERVICE_NAME`.
+
+### Upgrade notes
+
+- `ProfileGenerator::__construct()` gained a second argument
+  (`array $serviceBindingProviders = []`). Wired automatically via di.xml;
+  only code instantiating the class directly (e.g. tests) needs updating.
+- Behavior is unchanged for existing installs: with no MCP endpoint
+  configured, the emitted profile is byte-identical.
+
+Schema-compliance release. The generated profile is now validated end-to-end
+against the **official JSON Schemas** from the spec repository
+(`Universal-Commerce-Protocol/ucp`, tag `v2026-04-08`:
+`source/discovery/profile_schema.json`, `source/schemas/ucp.json`,
+`service.json`, `capability.json`, `payment_handler.json`). Spec version
+2026-04-08 remains the latest UCP release as of July 2026.
+
+### Fixed
+
+- **`ucp.services` and `ucp.payment_handlers` were omitted when empty —
+  schema violation.** `ucp.json#/$defs/business_schema` marks BOTH keys as
+  REQUIRED in a business profile, even when empty. Previously
+  `payment_handlers` was dropped when not configured and `services` was
+  emitted as an empty value only implicitly. Both keys (plus `capabilities`)
+  are now always present.
+- **Empty registries JSON-encoded as `[]` instead of `{}` — type violation.**
+  `services`, `capabilities`, and `payment_handlers` are JSON *objects* keyed
+  by reverse-domain name. Empty PHP arrays encode as JSON arrays, so a store
+  with no capabilities served a profile that failed schema validation
+  (`[] is not of type 'object'`). Empty registries are now emitted as
+  `stdClass` and serialize as `{}`.
+- **Admin-supplied `payment_handlers` were passed through unvalidated.**
+  Per `payment_handler.json#/$defs/base`, every handler entry REQUIRES a
+  string `id` and a `YYYY-MM-DD` `version`; the registry must be keyed by
+  reverse-domain names with array values. `Config::getPaymentHandlers()` now
+  enforces all of this, skipping invalid keys/entries with logged warnings so
+  the served profile always validates. A single entry object is tolerated and
+  wrapped into the required array form.
+
+### Added
+
+- **CORS preflight support.** The `/.well-known/ucp` action now also
+  implements `HttpOptionsActionInterface` and answers `OPTIONS` with
+  `204 No Content` plus `Allow`, `Access-Control-Allow-*`, and
+  `Access-Control-Max-Age` headers. Previously Magento's HTTP-method
+  validation rejected OPTIONS even though the response advertised
+  `Access-Control-Allow-Methods: GET, OPTIONS`. The preflight responds
+  identically whether or not the profile is enabled, so it does not leak
+  the advertised state.
+- **Controller unit tests** covering the OPTIONS preflight, the disabled
+  404 (`no-store`), the 200 response headers required by the spec's hosting
+  rules (`Content-Type: application/json`, CORS, `Cache-Control: public`
+  with `max-age >= 60`), and the 500 error path.
+- **Admin warning on Identity Linking.** The `identity_linking_enabled`
+  field now documents that declaring this capability requires publishing
+  OAuth 2.0 authorization server metadata at
+  `/.well-known/oauth-authorization-server` (RFC 8414), which is outside
+  this module's scope.
+
+### Changed
+
+- **`angeo:ucp:validate` rewritten against the official schemas.** New
+  checks: presence of the required `services`/`payment_handlers` keys;
+  reverse-domain pattern for all registry keys; `endpoint` REQUIRED for
+  rest/mcp/a2a service bindings in business profiles; payment handler
+  `id`/`version` requirements; `kid`/`kty` REQUIRED on signing keys.
+  Relaxed to match the business schema: capability `spec`/`schema` are now
+  warnings (optional at business level; only `version` is REQUIRED), and an
+  empty `services` registry is a warning rather than an error (schema-valid,
+  but agents have nothing to call).
+- Reverse-domain validation uses the exact pattern from the spec's
+  `reverse_domain_name.json` type (`Config::REVERSE_DOMAIN_PATTERN`).
+
+### Verified (no change needed)
+
+- Protocol version `2026-04-08` is still the latest UCP release.
+- `signing_keys` correctly published as a top-level sibling of `ucp`
+  (`profile_schema.json#/$defs/base`).
+- Catalog correctly split into `catalog.search` + `catalog.lookup`;
+  extensions correctly pruned when orphaned; `identity_linking` correctly
+  under `dev.ucp.common` with `config.scopes` as an object map; ES256 /
+  P-256 JWK signing keys match the Signatures spec (RFC 9421 foundation).
+
 ## [1.2.0] - 2026-06-13
 
 Fixes the endpoint wiring so `/.well-known/ucp` is actually served by the

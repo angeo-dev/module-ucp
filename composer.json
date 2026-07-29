@@ -2,7 +2,7 @@
     "name": "angeo/module-ucp",
     "description": "Spec-compliant Universal Commerce Protocol (UCP) profile generator for Magento 2. Generates /.well-known/ucp at protocol version 2026-04-08 with ECDSA P-256 signing keys, declared capabilities, and proper cache headers.",
     "type": "magento2-module",
-    "version": "1.2.0",
+    "version": "1.4.0",
     "license": "MIT",
     "keywords": [
         "magento2",

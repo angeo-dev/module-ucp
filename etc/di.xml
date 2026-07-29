@@ -21,6 +21,21 @@
         router in global di.xml does not reliably wire it into frontend routing.
     -->
 
+    <!--
+        Service binding provider pool. Each provider contributes transport
+        bindings to the ucp.services registry; fragments for the same
+        service name are merged (bindings appended). Third-party modules
+        add their own providers here via their own di.xml.
+    -->
+    <type name="Angeo\Ucp\Model\ProfileGenerator">
+        <arguments>
+            <argument name="serviceBindingProviders" xsi:type="array">
+                <item name="shopping_rest" xsi:type="object">Angeo\Ucp\Model\Service\RestShoppingBindingProvider</item>
+                <item name="shopping_mcp" xsi:type="object">Angeo\Ucp\Model\Service\McpShoppingBindingProvider</item>
+            </argument>
+        </arguments>
+    </type>
+
     <!-- CLI commands. -->
     <type name="Magento\Framework\Console\CommandList">
         <arguments>

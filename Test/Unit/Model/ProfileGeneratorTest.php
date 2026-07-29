@@ -10,6 +10,8 @@ namespace Angeo\Ucp\Test\Unit\Model;
 
 use Angeo\Ucp\Model\Config;
 use Angeo\Ucp\Model\ProfileGenerator;
+use Angeo\Ucp\Model\Service\McpShoppingBindingProvider;
+use Angeo\Ucp\Model\Service\RestShoppingBindingProvider;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -45,19 +47,46 @@ final class ProfileGeneratorTest extends TestCase
     }
 
     #[Test]
-    public function profile_omits_services_when_endpoint_is_blank(): void
+    public function empty_services_registry_is_present_and_serializes_as_json_object(): void
     {
+        // Per ucp.json#/$defs/business_schema, `services` is a REQUIRED key
+        // and registries are JSON objects — an empty registry must encode
+        // as {} rather than [].
         $profile = $this->generate(endpoint: '');
 
-        self::assertSame([], $profile['ucp']['services']);
+        self::assertArrayHasKey('services', $profile['ucp']);
+        self::assertInstanceOf(\stdClass::class, $profile['ucp']['services']);
+        self::assertStringContainsString(
+            '"services":{}',
+            json_encode($profile, JSON_UNESCAPED_SLASHES)
+        );
     }
 
     #[Test]
-    public function profile_omits_disabled_capabilities(): void
+    public function empty_capabilities_registry_serializes_as_json_object(): void
     {
         $profile = $this->generate();
 
-        self::assertSame([], $profile['ucp']['capabilities']);
+        self::assertArrayHasKey('capabilities', $profile['ucp']);
+        self::assertInstanceOf(\stdClass::class, $profile['ucp']['capabilities']);
+        self::assertStringContainsString(
+            '"capabilities":{}',
+            json_encode($profile, JSON_UNESCAPED_SLASHES)
+        );
+    }
+
+    #[Test]
+    public function payment_handlers_key_is_always_present_even_when_empty(): void
+    {
+        // business_schema REQUIRES the payment_handlers key; empty must be {}.
+        $profile = $this->generate();
+
+        self::assertArrayHasKey('payment_handlers', $profile['ucp']);
+        self::assertInstanceOf(\stdClass::class, $profile['ucp']['payment_handlers']);
+        self::assertStringContainsString(
+            '"payment_handlers":{}',
+            json_encode($profile, JSON_UNESCAPED_SLASHES)
+        );
     }
 
     #[Test]
@@ -158,12 +187,14 @@ final class ProfileGeneratorTest extends TestCase
     #[Test]
     public function fulfillment_extension_is_pruned_when_checkout_disabled(): void
     {
-        // Orphaned extensions must never be advertised.
+        // Orphaned extensions must never be advertised. With no other
+        // capability enabled the registry prunes to empty — which must
+        // serialize as a JSON object.
         $profile = $this->generate(checkout: false, fulfillment: true);
 
         self::assertArrayNotHasKey(
             'dev.ucp.shopping.fulfillment',
-            $profile['ucp']['capabilities']
+            self::caps($profile)
         );
     }
 
@@ -198,7 +229,7 @@ final class ProfileGeneratorTest extends TestCase
 
         self::assertArrayNotHasKey(
             'dev.ucp.shopping.discount',
-            $profile['ucp']['capabilities']
+            self::caps($profile)
         );
     }
 
@@ -286,6 +317,85 @@ final class ProfileGeneratorTest extends TestCase
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    #[Test]
+    public function mcp_endpoint_adds_mcp_binding_alongside_rest(): void
+    {
+        // schemas/service.json: each transport binding is a separate entry
+        // in the SAME service array.
+        $profile = $this->generate(mcpEndpoint: 'https://shop.example.com/mcp');
+
+        $bindings = $profile['ucp']['services']['dev.ucp.shopping'];
+
+        self::assertCount(2, $bindings);
+        self::assertSame(['rest', 'mcp'], array_column($bindings, 'transport'));
+        self::assertSame('https://shop.example.com/mcp', $bindings[1]['endpoint']);
+        self::assertSame(Config::PROTOCOL_VERSION, $bindings[1]['version']);
+    }
+
+    #[Test]
+    public function mcp_binding_alone_is_emitted_when_rest_endpoint_is_blank(): void
+    {
+        $profile = $this->generate(
+            endpoint: '',
+            mcpEndpoint: 'https://shop.example.com/mcp'
+        );
+
+        $bindings = $profile['ucp']['services']['dev.ucp.shopping'];
+
+        self::assertCount(1, $bindings);
+        self::assertSame('mcp', $bindings[0]['transport']);
+    }
+
+    #[Test]
+    public function no_mcp_binding_without_configured_mcp_endpoint(): void
+    {
+        // MCP is opt-in only: never derived from the base URL.
+        $profile = $this->generate();
+
+        $transports = array_column(
+            $profile['ucp']['services']['dev.ucp.shopping'],
+            'transport'
+        );
+
+        self::assertNotContains('mcp', $transports);
+    }
+
+    #[Test]
+    public function malformed_provider_fragments_are_dropped_defensively(): void
+    {
+        $stub = $this->createStub(Config::class);
+        $stub->method('getPaymentHandlers')->willReturn([]);
+        $stub->method('getSupportedVersions')->willReturn([]);
+        $stub->method('getPublicSigningKeys')->willReturn([]);
+
+        $badProvider = new class implements \Angeo\Ucp\Api\ServiceBindingProviderInterface {
+            public function getBindings(string $protocolVersion): array
+            {
+                return [
+                    'NotReverseDomain' => [['transport' => 'rest']],
+                    'dev.ucp.shopping' => ['not-a-binding-object'],
+                ];
+            }
+        };
+
+        $profile = (new ProfileGenerator($stub, [$badProvider]))->generate();
+
+        self::assertInstanceOf(\stdClass::class, $profile['ucp']['services']);
+    }
+
+    /**
+     * Normalise the capabilities registry (array when populated, stdClass
+     * when empty) to an array for assertions.
+     *
+     * @param array<string, mixed> $profile
+     * @return array<string, mixed>
+     */
+    private static function caps(array $profile): array
+    {
+        $caps = $profile['ucp']['capabilities'];
+        return $caps instanceof \stdClass ? (array) $caps : $caps;
+    }
+
     /**
      * @param array<string, string> $supportedVersions
      * @param array<string, mixed>  $paymentHandlers
@@ -300,6 +410,7 @@ final class ProfileGeneratorTest extends TestCase
         bool $checkout = false,
         bool $order = false,
         bool $identityLinking = false,
+        string $mcpEndpoint = '',
         array $identityScopes = [],
         bool $fulfillment = false,
         bool $discount = false,
@@ -310,6 +421,7 @@ final class ProfileGeneratorTest extends TestCase
         $stub = $this->createStub(Config::class);
         $stub->method('isEnabled')->willReturn(true);
         $stub->method('getRestEndpoint')->willReturn($endpoint);
+        $stub->method('getMcpEndpoint')->willReturn($mcpEndpoint);
         $stub->method('isCatalogSearchDeclared')->willReturn($catalogSearch);
         $stub->method('isCatalogLookupDeclared')->willReturn($catalogLookup);
         $stub->method('isCartDeclared')->willReturn($cart);
@@ -323,6 +435,12 @@ final class ProfileGeneratorTest extends TestCase
         $stub->method('getPaymentHandlers')->willReturn($paymentHandlers);
         $stub->method('getPublicSigningKeys')->willReturn($signingKeys);
 
-        return (new ProfileGenerator($stub))->generate();
+        // Same provider pool shape as etc/di.xml wires in production.
+        $providers = [
+            new RestShoppingBindingProvider($stub),
+            new McpShoppingBindingProvider($stub),
+        ];
+
+        return (new ProfileGenerator($stub, $providers))->generate();
     }
 }

@@ -18,15 +18,25 @@ use Symfony\Component\Console\Output\OutputInterface;
 /**
  * CLI: bin/magento angeo:ucp:validate
  *
- * Validates the generated UCP business profile against the 2026-04-08 spec:
+ * Validates the generated UCP business profile against the 2026-04-08 spec
+ * (checks derived from the official JSON Schemas in the spec repository,
+ * tag v2026-04-08: discovery/profile_schema.json, schemas/ucp.json,
+ * schemas/service.json, schemas/capability.json, schemas/payment_handler.json):
  *  - protocol version declared and correct
- *  - at least one service binding; every binding has version/spec/transport
+ *  - `services` and `payment_handlers` keys PRESENT in the ucp object
+ *    (business_schema: REQUIRED even when empty)
+ *  - empty registries serialize as JSON objects `{}`, never arrays `[]`
+ *  - registry keys match the reverse-domain pattern
+ *  - every service binding has version + transport; REST/MCP/A2A bindings
+ *    have an `endpoint` (business_schema: REQUIRED per transport)
  *  - all endpoint URLs use HTTPS (spec: endpoint MUST be HTTPS)
  *  - endpoints have no trailing slash (spec: SHOULD NOT)
- *  - every capability has version + spec + schema (spec: REQUIRED fields)
+ *  - every capability has `version` (REQUIRED); spec/schema recommended
  *  - dev.ucp.* capabilities have spec/schema origins on https://ucp.dev
  *    (spec: Spec URL Binding — origin MUST match namespace authority)
  *  - no orphaned extensions (every `extends` target is present in the profile)
+ *  - every payment handler entry has `id` + `version` (REQUIRED)
+ *  - signing keys carry no private material; kid/kty REQUIRED
  *  - profile JSON-encodes under JSON_THROW_ON_ERROR
  *
  * Exit code 0 on pass (warnings allowed), 1 on failure.
@@ -72,17 +82,43 @@ class ValidateProfileCommand extends Command
             $errors[] = 'Missing or incorrect protocol version. Expected ' . Config::PROTOCOL_VERSION;
         }
 
+        // ── Required registry keys (business_schema) ──────────────────────
+        // Per ucp.json#/$defs/business_schema, `services` and
+        // `payment_handlers` MUST be present in the ucp object (empty is
+        // allowed, absent is not).
+        foreach (['services', 'payment_handlers'] as $requiredKey) {
+            if (!array_key_exists($requiredKey, $profile['ucp'] ?? [])) {
+                $errors[] = sprintf(
+                    'ucp.%s key is missing. The business profile schema requires '
+                    . 'it to be present even when empty.',
+                    $requiredKey
+                );
+            }
+        }
+
         // ── Service bindings ──────────────────────────────────────────────
-        $services = $profile['ucp']['services'] ?? [];
-        if (!is_array($services) || $services === []) {
-            $errors[] = 'No service bindings declared. Configure a REST endpoint in admin.';
+        $services = self::registryToArray($profile['ucp']['services'] ?? []);
+        if ($services === []) {
+            $warnings[] = 'No service bindings declared. The profile is schema-valid '
+                . 'but AI agents have no endpoint to call. Configure a REST endpoint '
+                . 'in admin when your UCP service implementation is live.';
         } else {
             foreach ($services as $serviceName => $bindings) {
+                if (!preg_match(Config::REVERSE_DOMAIN_PATTERN, (string) $serviceName)) {
+                    $errors[] = sprintf(
+                        'Service key "%s" is not a valid reverse-domain name.',
+                        $serviceName
+                    );
+                }
                 if (!is_array($bindings)) {
+                    $errors[] = sprintf(
+                        'Service "%s" value must be an array of transport bindings.',
+                        $serviceName
+                    );
                     continue;
                 }
                 foreach ($bindings as $binding) {
-                    foreach (['version', 'spec', 'transport'] as $required) {
+                    foreach (['version', 'transport'] as $required) {
                         if (empty($binding[$required])) {
                             $errors[] = sprintf(
                                 'Service "%s" binding is missing required field "%s".',
@@ -90,6 +126,19 @@ class ValidateProfileCommand extends Command
                                 $required
                             );
                         }
+                    }
+
+                    // business_schema: rest/mcp/a2a transports REQUIRE endpoint.
+                    $transport = (string) ($binding['transport'] ?? '');
+                    if (in_array($transport, ['rest', 'mcp', 'a2a'], true)
+                        && empty($binding['endpoint'])
+                    ) {
+                        $errors[] = sprintf(
+                            'Service "%s" %s binding is missing "endpoint" '
+                            . '(REQUIRED for this transport in business profiles).',
+                            $serviceName,
+                            $transport
+                        );
                     }
 
                     $endpoint = (string) ($binding['endpoint'] ?? '');
@@ -113,22 +162,37 @@ class ValidateProfileCommand extends Command
         }
 
         // ── Capabilities ──────────────────────────────────────────────────
-        $capabilities = $profile['ucp']['capabilities'] ?? [];
-        if (is_array($capabilities)) {
+        $capabilities = self::registryToArray($profile['ucp']['capabilities'] ?? []);
+        if (true) {
             $declaredNames = array_keys($capabilities);
 
             foreach ($capabilities as $capName => $entries) {
+                if (!preg_match(Config::REVERSE_DOMAIN_PATTERN, (string) $capName)) {
+                    $errors[] = sprintf(
+                        'Capability key "%s" is not a valid reverse-domain name.',
+                        $capName
+                    );
+                }
                 if (!is_array($entries)) {
                     continue;
                 }
                 foreach ($entries as $entry) {
-                    // version, spec, schema are REQUIRED for capabilities.
-                    foreach (['version', 'spec', 'schema'] as $required) {
-                        if (empty($entry[$required])) {
-                            $errors[] = sprintf(
-                                'Capability "%s" is missing required field "%s".',
+                    // Schema: only `version` is REQUIRED at business level.
+                    if (empty($entry['version'])) {
+                        $errors[] = sprintf(
+                            'Capability "%s" is missing required field "version".',
+                            $capName
+                        );
+                    }
+                    // spec/schema are optional in business profiles but
+                    // strongly recommended so agents can fetch definitions.
+                    foreach (['spec', 'schema'] as $recommended) {
+                        if (empty($entry[$recommended])) {
+                            $warnings[] = sprintf(
+                                'Capability "%s" has no "%s" URL (optional per '
+                                . 'business schema, but recommended).',
                                 $capName,
-                                $required
+                                $recommended
                             );
                         }
                     }
@@ -169,6 +233,44 @@ class ValidateProfileCommand extends Command
             }
         }
 
+        // ── Payment handlers ──────────────────────────────────────────────
+        $paymentHandlers = self::registryToArray($profile['ucp']['payment_handlers'] ?? []);
+        foreach ($paymentHandlers as $handlerName => $entries) {
+            if (!preg_match(Config::REVERSE_DOMAIN_PATTERN, (string) $handlerName)) {
+                $errors[] = sprintf(
+                    'Payment handler key "%s" is not a valid reverse-domain name.',
+                    $handlerName
+                );
+            }
+            if (!is_array($entries) || !array_is_list($entries)) {
+                $errors[] = sprintf(
+                    'payment_handlers["%s"] must be a JSON array of handler entries.',
+                    $handlerName
+                );
+                continue;
+            }
+            foreach ($entries as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                if (empty($entry['id']) || !is_string($entry['id'])) {
+                    $errors[] = sprintf(
+                        'payment_handlers["%s"] entry is missing required string "id".',
+                        $handlerName
+                    );
+                }
+                if (empty($entry['version'])
+                    || !preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $entry['version'])
+                ) {
+                    $errors[] = sprintf(
+                        'payment_handlers["%s"] entry is missing a required '
+                        . 'YYYY-MM-DD "version".',
+                        $handlerName
+                    );
+                }
+            }
+        }
+
         // ── supported_versions sanity ─────────────────────────────────────
         $supportedVersions = $profile['ucp']['supported_versions'] ?? [];
         if (is_array($supportedVersions)) {
@@ -191,6 +293,17 @@ class ValidateProfileCommand extends Command
         }
 
         foreach ($signingKeys as $key) {
+            if (is_array($key)) {
+                // Schema (profile_schema.json#/$defs/signing_key): kid + kty REQUIRED.
+                foreach (['kid', 'kty'] as $requiredField) {
+                    if (empty($key[$requiredField])) {
+                        $errors[] = sprintf(
+                            'Signing key is missing required field "%s".',
+                            $requiredField
+                        );
+                    }
+                }
+            }
             if (is_array($key) && array_intersect_key($key, array_flip(['d', 'p', 'q', 'dp', 'dq', 'qi'])) !== []) {
                 $errors[] = sprintf(
                     'Signing key "%s" contains PRIVATE key material. Rotate the key immediately.',
@@ -237,5 +350,21 @@ class ValidateProfileCommand extends Command
         }
 
         return Command::SUCCESS;
+    }
+
+    /**
+     * Normalise a registry value to an array for inspection.
+     *
+     * Empty registries are emitted as stdClass so they JSON-encode as `{}`;
+     * cast them back to arrays for validation.
+     *
+     * @return array<string|int, mixed>
+     */
+    private static function registryToArray(mixed $registry): array
+    {
+        if ($registry instanceof \stdClass) {
+            return (array) $registry;
+        }
+        return is_array($registry) ? $registry : [];
     }
 }

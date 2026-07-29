@@ -55,6 +55,7 @@ class Config
     public const XML_PATH_IDENTITY_SCOPES       = 'angeo_ucp/capabilities/identity_linking_scopes';
 
     public const XML_PATH_REST_ENDPOINT         = 'angeo_ucp/transport/rest_endpoint';
+    public const XML_PATH_MCP_ENDPOINT          = 'angeo_ucp/transport/mcp_endpoint';
     public const XML_PATH_SIGNING_KEY_JWK       = 'angeo_ucp/keys/signing_key_jwk';
 
     // Advanced: optional raw-JSON declarations.
@@ -63,6 +64,16 @@ class Config
 
     /** Maximum JSON depth accepted when decoding stored JSON config values. */
     private const JSON_MAX_DEPTH = 16;
+
+    /**
+     * Reverse-domain name pattern per the official spec schema
+     * (source/schemas/shopping/types/reverse_domain_name.json equivalent):
+     * at least two dot-separated lowercase segments.
+     */
+    public const REVERSE_DOMAIN_PATTERN = '/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]*)+$/';
+
+    /** Reverse-domain name of the UCP shopping service. */
+    public const SHOPPING_SERVICE_NAME = 'dev.ucp.shopping';
 
     /** Fields that must never appear in a public JWK. */
     private const PRIVATE_JWK_FIELDS = ['d', 'p', 'q', 'dp', 'dq', 'qi'];
@@ -158,10 +169,10 @@ class Config
      */
     public function getRestEndpoint(): string
     {
-        $configured = (string) $this->scopeConfig->getValue(
+        $configured = trim((string) $this->scopeConfig->getValue(
             self::XML_PATH_REST_ENDPOINT,
             ScopeInterface::SCOPE_STORE
-        );
+        ));
 
         if ($configured !== '') {
             $endpoint = rtrim($configured, '/');
@@ -181,6 +192,29 @@ class Config
 
         $endpoint = rtrim($baseUrl, '/') . '/rest/V1/ucp';
         $this->warnIfNotHttps($endpoint, 'derived REST endpoint');
+        return $endpoint;
+    }
+
+    /**
+     * Optional MCP transport endpoint (e.g. the Streamable HTTP endpoint of
+     * angeo/module-mcp-server). Advertised in the profile as an `mcp`
+     * binding of dev.ucp.shopping ONLY when explicitly configured — there
+     * is deliberately no derived fallback, because an MCP server is
+     * separate, opt-in infrastructure.
+     */
+    public function getMcpEndpoint(): string
+    {
+        $configured = trim((string) $this->scopeConfig->getValue(
+            self::XML_PATH_MCP_ENDPOINT,
+            ScopeInterface::SCOPE_STORE
+        ));
+
+        if ($configured === '') {
+            return '';
+        }
+
+        $endpoint = rtrim($configured, '/');
+        $this->warnIfNotHttps($endpoint, 'configured MCP endpoint');
         return $endpoint;
     }
 
@@ -228,25 +262,89 @@ class Config
 
     /**
      * Optional payment_handlers declaration (raw JSON object per UCP spec).
-     * Admin-supplied; validated to be a JSON object before inclusion.
      *
-     * @return array<string, mixed>
+     * Validated against the official schema (payment_handler.json, spec repo
+     * tag v2026-04-08): the registry is a JSON object keyed by reverse-domain
+     * handler name; each value is an ARRAY of handler entries; each entry
+     * MUST carry `id` (string) and `version` (YYYY-MM-DD). Invalid entries
+     * are skipped with a logged warning so the served profile always
+     * validates.
+     *
+     * @return array<string, array<int, array<string, mixed>>>
      */
     public function getPaymentHandlers(): array
     {
         $decoded = $this->decodeJsonConfig(self::XML_PATH_PAYMENT_HANDLERS, 'payment_handlers');
 
-        if (!is_array($decoded) || $decoded === [] || array_is_list($decoded)) {
-            if (is_array($decoded) && $decoded !== [] && array_is_list($decoded)) {
-                $this->logger->warning(
-                    '[Angeo_Ucp] payment_handlers must be a JSON object keyed by '
-                    . 'handler name (reverse-domain), not a JSON array; ignoring.'
-                );
-            }
+        if (!is_array($decoded) || $decoded === []) {
             return [];
         }
 
-        return $decoded;
+        if (array_is_list($decoded)) {
+            $this->logger->warning(
+                '[Angeo_Ucp] payment_handlers must be a JSON object keyed by '
+                . 'handler name (reverse-domain), not a JSON array; ignoring.'
+            );
+            return [];
+        }
+
+        $valid = [];
+
+        foreach ($decoded as $handlerName => $entries) {
+            if (!is_string($handlerName)
+                || !preg_match(self::REVERSE_DOMAIN_PATTERN, $handlerName)
+            ) {
+                $this->logger->warning(sprintf(
+                    '[Angeo_Ucp] payment_handlers key "%s" is not a valid '
+                    . 'reverse-domain name (e.g. "com.example.pay"); skipping.',
+                    is_string($handlerName) ? $handlerName : gettype($handlerName)
+                ));
+                continue;
+            }
+
+            // Tolerate a single entry object by wrapping it into a list.
+            if (is_array($entries) && !array_is_list($entries)) {
+                $entries = [$entries];
+            }
+
+            if (!is_array($entries)) {
+                $this->logger->warning(sprintf(
+                    '[Angeo_Ucp] payment_handlers["%s"] must be an array of '
+                    . 'handler entries; skipping.',
+                    $handlerName
+                ));
+                continue;
+            }
+
+            $validEntries = [];
+            foreach ($entries as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                // Schema: entity requires `version`; handler base requires `id`.
+                $id      = $entry['id'] ?? null;
+                $version = $entry['version'] ?? null;
+                if (!is_string($id) || $id === ''
+                    || !is_string($version)
+                    || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $version)
+                ) {
+                    $this->logger->warning(sprintf(
+                        '[Angeo_Ucp] payment_handlers["%s"] entry is missing a '
+                        . 'string "id" and/or a YYYY-MM-DD "version" (both '
+                        . 'REQUIRED per spec); skipping the entry.',
+                        $handlerName
+                    ));
+                    continue;
+                }
+                $validEntries[] = $entry;
+            }
+
+            if ($validEntries !== []) {
+                $valid[$handlerName] = $validEntries;
+            }
+        }
+
+        return $valid;
     }
 
     // ── Signing keys ──────────────────────────────────────────────────────────

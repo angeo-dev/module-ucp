@@ -9,6 +9,7 @@ declare(strict_types=1);
 namespace Angeo\Ucp\Model;
 
 use Angeo\Ucp\Api\ProfileGeneratorInterface;
+use Angeo\Ucp\Api\ServiceBindingProviderInterface;
 
 /**
  * Builds the UCP business profile per spec version 2026-04-08.
@@ -32,15 +33,36 @@ use Angeo\Ucp\Api\ProfileGeneratorInterface;
  *  - supported_versions (map version → profile URI) SHOULD be published by
  *    businesses that support older protocol versions.
  *
- *  - payment_handlers MAY be declared at the same level as capabilities.
+ * Verified against the official JSON Schemas in the spec repository
+ * (Universal-Commerce-Protocol/ucp, tag v2026-04-08):
+ *
+ *  - business_schema REQUIRES the `services` and `payment_handlers` keys of
+ *    the `ucp` object to be present, even when empty
+ *    (source/schemas/ucp.json#/$defs/business_schema).
+ *
+ *  - `services`, `capabilities`, and `payment_handlers` are JSON OBJECTS
+ *    keyed by reverse-domain name. Empty registries must serialize as `{}`,
+ *    never `[]`.
+ *
+ *  - `signing_keys` is a TOP-LEVEL sibling of `ucp`
+ *    (source/discovery/profile_schema.json#/$defs/base).
+ *
+ *  - each payment handler entry requires `id` and `version`
+ *    (source/schemas/payment_handler.json#/$defs/base).
  */
 class ProfileGenerator implements ProfileGeneratorInterface
 {
-    private const SHOPPING_SERVICE_NAME = 'dev.ucp.shopping';
     private const SPEC_BASE = 'https://ucp.dev/2026-04-08';
 
+    /**
+     * @param ServiceBindingProviderInterface[] $serviceBindingProviders
+     *        Pool of transport binding providers collected via di.xml.
+     *        Third-party modules can contribute additional services or
+     *        transports without modifying this class.
+     */
     public function __construct(
-        private readonly Config $config
+        private readonly Config $config,
+        private readonly array $serviceBindingProviders = []
     ) {
     }
 
@@ -48,16 +70,19 @@ class ProfileGenerator implements ProfileGeneratorInterface
     {
         $version = Config::PROTOCOL_VERSION;
 
+        // Per the official business profile schema (ucp.json#/$defs/business_schema,
+        // spec repo tag v2026-04-08), `services` AND `payment_handlers` are
+        // REQUIRED keys of the ucp object — they must be present even when
+        // empty. All three registries are JSON *objects* keyed by
+        // reverse-domain name, so empty registries must serialize as `{}`
+        // (stdClass), never as `[]` (a PHP empty array would JSON-encode as
+        // an array and fail schema validation).
         $ucp = [
-            'version'      => $version,
-            'services'     => $this->buildServices($version),
-            'capabilities' => $this->buildCapabilities($version),
+            'version'          => $version,
+            'services'         => self::asJsonObject($this->buildServices($version)),
+            'capabilities'     => self::asJsonObject($this->buildCapabilities($version)),
+            'payment_handlers' => self::asJsonObject($this->config->getPaymentHandlers()),
         ];
-
-        $paymentHandlers = $this->config->getPaymentHandlers();
-        if ($paymentHandlers !== []) {
-            $ucp['payment_handlers'] = $paymentHandlers;
-        }
 
         $supportedVersions = $this->config->getSupportedVersions();
         if ($supportedVersions !== []) {
@@ -75,26 +100,60 @@ class ProfileGenerator implements ProfileGeneratorInterface
     }
 
     /**
-     * @return array<string, array<int, array<string, string>>>
+     * Ensure a registry map serializes as a JSON object.
+     *
+     * Empty PHP arrays JSON-encode as `[]`, but the UCP profile schema
+     * requires `services`, `capabilities`, and `payment_handlers` to be
+     * objects. Non-empty maps keep their string keys and encode correctly.
+     *
+     * @param array<string, mixed> $map
+     */
+    private static function asJsonObject(array $map): array|\stdClass
+    {
+        return $map === [] ? new \stdClass() : $map;
+    }
+
+    /**
+     * Merge registry fragments from all binding providers.
+     *
+     * Bindings from multiple providers for the same service name are
+     * APPENDED into one array — the spec models each transport binding as
+     * a separate entry in the service array (schemas/service.json), so a
+     * store exposing both REST and MCP publishes:
+     *
+     *   "dev.ucp.shopping": [ {transport: "rest", ...}, {transport: "mcp", ...} ]
+     *
+     * Providers that are not configured return [] and are skipped. Non
+     * spec-compliant fragments (non-reverse-domain keys, non-list values)
+     * are dropped defensively; `angeo:ucp:validate` reports the details.
+     *
+     * @return array<string, array<int, array<string, mixed>>>
      */
     private function buildServices(string $version): array
     {
-        $endpoint = $this->config->getRestEndpoint();
-        if ($endpoint === '') {
-            return [];
+        $services = [];
+
+        foreach ($this->serviceBindingProviders as $provider) {
+            if (!$provider instanceof ServiceBindingProviderInterface) {
+                continue;
+            }
+            foreach ($provider->getBindings($version) as $serviceName => $bindings) {
+                if (!is_string($serviceName)
+                    || !preg_match(Config::REVERSE_DOMAIN_PATTERN, $serviceName)
+                    || !is_array($bindings)
+                    || !array_is_list($bindings)
+                ) {
+                    continue;
+                }
+                foreach ($bindings as $binding) {
+                    if (is_array($binding)) {
+                        $services[$serviceName][] = $binding;
+                    }
+                }
+            }
         }
 
-        return [
-            self::SHOPPING_SERVICE_NAME => [
-                [
-                    'version'   => $version,
-                    'spec'      => self::SPEC_BASE . '/specification/overview',
-                    'transport' => 'rest',
-                    'endpoint'  => $endpoint,
-                    'schema'    => self::SPEC_BASE . '/services/shopping/rest.openapi.json',
-                ],
-            ],
-        ];
+        return $services;
     }
 
     /**

@@ -81,10 +81,19 @@
                     <label>Order (dev.ucp.shopping.order)</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                 </field>
-                <field id="identity_linking_enabled" translate="label" type="select" sortOrder="60"
+                <field id="identity_linking_enabled" translate="label comment" type="select" sortOrder="60"
                        showInDefault="1" showInWebsite="1" showInStore="1">
                     <label>Identity Linking (dev.ucp.common.identity_linking)</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[
+                        <strong>Requires a working OAuth 2.0 server.</strong>
+                        Per the UCP spec, businesses declaring identity linking
+                        must publish OAuth 2.0 authorization server metadata at
+                        <code>/.well-known/oauth-authorization-server</code>
+                        (RFC 8414). This module does not provide that endpoint —
+                        only enable this capability when your OAuth server and
+                        its metadata document are live.
+                    ]]></comment>
                 </field>
                 <field id="identity_linking_scopes" translate="label comment" type="text" sortOrder="70"
                        showInDefault="1" showInWebsite="1" showInStore="1">
@@ -134,6 +143,19 @@
                         blank to use <code>{baseUrl}/rest/V1/ucp</code>.
                         Must be HTTPS; must not end with a trailing slash
                         (trailing slashes are stripped automatically).
+                    ]]></comment>
+                </field>
+                <field id="mcp_endpoint" translate="label comment" type="text" sortOrder="20"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>MCP Endpoint URL</label>
+                    <comment><![CDATA[
+                        Optional. HTTPS URL of your MCP server's Streamable
+                        HTTP endpoint (e.g. from <code>angeo/module-mcp-server</code>).
+                        When set, the profile advertises an additional
+                        <code>mcp</code> transport binding for
+                        <code>dev.ucp.shopping</code> alongside REST. Leave
+                        empty if you do not run an MCP server — unlike the
+                        REST endpoint, this is never derived automatically.
                     ]]></comment>
                 </field>
             </group>
