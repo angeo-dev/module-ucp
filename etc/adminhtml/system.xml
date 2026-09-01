@@ -26,8 +26,16 @@
                 <comment><![CDATA[
                     Configures the UCP business profile served at
                     <code>/.well-known/ucp</code>. Protocol version
-                    <code>2026-04-08</code>. Profile structure verified against
-                    <a href="https://ucp.dev/2026-04-08/specification/overview/" target="_blank">ucp.dev</a>.
+                    <code>2026-08-25</code>. Profile structure verified against
+                    <a href="https://ucp.dev/2026-08-25/specification/overview/" target="_blank">ucp.dev</a>.
+                    <br/><br/>
+                    <strong>Upgraded from 1.x?</strong> The advertised protocol
+                    version changed from <code>2026-04-08</code> to
+                    <code>2026-08-25</code>, and signing keys moved to the
+                    profile's canonical <code>keys[]</code> array. If any
+                    platform still integrates against your old profile, publish
+                    a frozen copy of it and list it under
+                    <em>Advanced &rarr; Supported Versions</em>.
                 ]]></comment>
                 <field id="enabled" translate="label comment"
                        type="select" sortOrder="10"
@@ -106,6 +114,30 @@
                     ]]></comment>
                     <depends><field id="identity_linking_enabled">1</field></depends>
                 </field>
+                <field id="permalink_enabled" translate="label comment" type="select" sortOrder="80"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Permalink (dev.ucp.shopping.permalink)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[
+                        New in protocol version 2026-08-25. Lets an agent hand
+                        the shopper a real, buyable URL on your storefront
+                        instead of transacting through the API.
+                        <strong>Unlike the other capabilities, this one needs no
+                        UCP endpoint module</strong> — a stock Magento cart URL
+                        already satisfies it, so it is safe to enable on any
+                        store.
+                    ]]></comment>
+                </field>
+                <field id="permalink_endpoint" translate="label comment" type="text" sortOrder="90"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Permalink Endpoint URL</label>
+                    <comment><![CDATA[
+                        Published as <code>config.endpoint</code>. Leave blank to
+                        use <code>{baseUrl}/checkout/cart</code>, which is where
+                        Magento's own add-to-cart links resolve. Must be HTTPS.
+                    ]]></comment>
+                    <depends><field id="permalink_enabled">1</field></depends>
+                </field>
             </group>
 
             <group id="extensions" translate="label comment"
@@ -129,6 +161,20 @@
                     <label>Discount (dev.ucp.shopping.discount)</label>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                     <comment>Extends Checkout and/or Cart. Only advertised when at least one parent is enabled.</comment>
+                </field>
+                <field id="buyer_consent_enabled" translate="label comment" type="select" sortOrder="30"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Buyer Consent (dev.ucp.shopping.buyer_consent)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[
+                        New in protocol version 2026-08-25. Lets an agent collect
+                        marketing, analytics and sale-or-sharing consent on your
+                        behalf during cart or checkout. Extends Checkout and/or
+                        Cart. <strong>Only enable this once your checkout
+                        integration actually records the consent it receives</strong> —
+                        advertising it otherwise means agents collect consent
+                        that is then silently dropped.
+                    ]]></comment>
                 </field>
             </group>
 
@@ -165,17 +211,26 @@
                 <label>Signing Keys</label>
                 <comment><![CDATA[
                     Generated via CLI: <code>bin/magento angeo:ucp:keys:generate</code>.
-                    Only the <em>public</em> JWK is stored here; the private PEM
-                    must be placed in <code>app/etc/env.php</code> by the operator.
+                    Only the <em>public</em> JWKs are stored here; the private PEM
+                    is printed once and must be placed in
+                    <code>app/etc/env.php</code> by the operator.
+                    <br/><br/>
+                    Published as the profile's top-level <code>keys[]</code> array
+                    (RFC 7517 JWK Set). Rotate without downtime by publishing the
+                    new key alongside the old one
+                    (<code>--add</code>), moving signing over, and only then
+                    removing the old entry — a key is not effectively revoked
+                    until it is <em>absent</em> from this array.
                 ]]></comment>
                 <field id="signing_key_jwk" translate="label comment" type="textarea" sortOrder="10"
                        showInDefault="1" showInWebsite="0" showInStore="0">
-                    <label>Public JWK (read-only)</label>
-                    <comment>
-                        Populated by the keys:generate command. Edit only if you
-                        know what you are doing — manual edits can desync from the
+                    <label>Public JWK Set (read-only)</label>
+                    <comment><![CDATA[
+                        JSON array of public JWKs, populated by
+                        <code>angeo:ucp:keys:generate</code>. Edit only if you know
+                        what you are doing — manual edits can desync from the
                         private PEM in env.php.
-                    </comment>
+                    ]]></comment>
                 </field>
             </group>
 
@@ -192,8 +247,11 @@
                     <comment><![CDATA[
                         Map of older protocol versions to version-specific
                         profile URIs, e.g.
-                        <code>{"2026-01-23": "https://yourstore.com/ucp/profiles/2026-01-23.json"}</code>.
-                        Keys must be YYYY-MM-DD; URIs must be HTTPS.
+                        <code>{"2026-04-08": "https://yourstore.com/ucp/profiles/2026-04-08.json"}</code>.
+                        Keys must be YYYY-MM-DD; URIs must be HTTPS. Each URI must
+                        serve a complete, self-contained profile for that version —
+                        this module serves only the current one, so the older
+                        profile has to be a static file you host yourself.
                     ]]></comment>
                 </field>
                 <field id="payment_handlers" translate="label comment" type="textarea" sortOrder="20"

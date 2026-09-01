@@ -31,7 +31,19 @@ use Psr\Log\LoggerInterface;
  */
 class Config
 {
-    public const PROTOCOL_VERSION = '2026-04-08';
+    /**
+     * UCP protocol version advertised by this module.
+     *
+     * 2.0.0 adopts the 2026-08-25 release. Consequences that ripple through
+     * this class: the documentation tree moved under /specification/shopping/
+     * (see Model\\Spec), `schema` became REQUIRED on business capabilities,
+     * the reverse-domain pattern was widened, and signing keys moved from
+     * `signing_keys` to the canonical top-level `keys[]` JWK Set.
+     */
+    public const PROTOCOL_VERSION = '2026-08-25';
+
+    /** Protocol version shipped by 1.x, kept for the migration notice. */
+    public const PREVIOUS_PROTOCOL_VERSION = '2026-04-08';
 
     public const XML_PATH_ENABLED               = 'angeo_ucp/general/enabled';
 
@@ -42,6 +54,8 @@ class Config
     public const XML_PATH_CAP_CHECKOUT          = 'angeo_ucp/capabilities/checkout_enabled';
     public const XML_PATH_CAP_ORDER             = 'angeo_ucp/capabilities/order_enabled';
     public const XML_PATH_CAP_IDENTITY          = 'angeo_ucp/capabilities/identity_linking_enabled';
+    public const XML_PATH_CAP_PERMALINK         = 'angeo_ucp/capabilities/permalink_enabled';
+    public const XML_PATH_PERMALINK_ENDPOINT    = 'angeo_ucp/capabilities/permalink_endpoint';
 
     // Legacy path (pre-1.1.0) — a single "catalog" toggle. Honoured for
     // backwards compatibility: when set, it enables BOTH search and lookup.
@@ -50,6 +64,7 @@ class Config
     // Extensions (extends a parent capability per spec).
     public const XML_PATH_EXT_FULFILLMENT       = 'angeo_ucp/extensions/fulfillment_enabled';
     public const XML_PATH_EXT_DISCOUNT          = 'angeo_ucp/extensions/discount_enabled';
+    public const XML_PATH_EXT_BUYER_CONSENT     = 'angeo_ucp/extensions/buyer_consent_enabled';
 
     // Identity-linking OAuth scopes (comma-separated list in admin).
     public const XML_PATH_IDENTITY_SCOPES       = 'angeo_ucp/capabilities/identity_linking_scopes';
@@ -66,17 +81,25 @@ class Config
     private const JSON_MAX_DEPTH = 16;
 
     /**
-     * Reverse-domain name pattern per the official spec schema
-     * (source/schemas/shopping/types/reverse_domain_name.json equivalent):
-     * at least two dot-separated lowercase segments.
+     * Reverse-domain name pattern, copied verbatim from the official
+     * schema at spec tag v2026-08-25
+     * (source/schemas/common/types/reverse_domain_name.json).
+     *
+     * WIDENED in 2.0.0. The 2026-04-08 pattern rejected names the current
+     * spec explicitly lists as valid: interior hyphens in any segment
+     * ("com.example-shop.checkout"), leading digits after the first segment
+     * ("com.2example.cart"), and punycode TLDs ("xn--p1ai.example.checkout").
+     * A payment handler or third-party binding using one of those was
+     * silently dropped from the profile under 1.x.
      */
-    public const REVERSE_DOMAIN_PATTERN = '/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]*)+$/';
+    public const REVERSE_DOMAIN_PATTERN =
+        '/^[a-z](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_-]*[a-z0-9_])?)+$/';
 
     /** Reverse-domain name of the UCP shopping service. */
     public const SHOPPING_SERVICE_NAME = 'dev.ucp.shopping';
 
     /** Fields that must never appear in a public JWK. */
-    private const PRIVATE_JWK_FIELDS = ['d', 'p', 'q', 'dp', 'dq', 'qi'];
+    private const PRIVATE_JWK_FIELDS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'];
 
     public function __construct(
         private readonly ScopeConfigInterface  $scopeConfig,
@@ -124,6 +147,51 @@ class Config
         return $this->getFlag(self::XML_PATH_CAP_IDENTITY);
     }
 
+    /**
+     * dev.ucp.shopping.permalink — new root capability in 2026-08-25.
+     *
+     * Handing an agent a buyable URL is the one capability a plain Magento
+     * storefront already satisfies without any UCP endpoint, so unlike the
+     * other toggles it is safe to advertise on a stock install.
+     */
+    public function isPermalinkDeclared(): bool
+    {
+        return $this->getFlag(self::XML_PATH_CAP_PERMALINK);
+    }
+
+    /**
+     * Permalink `config.endpoint` — the base URL an agent appends its
+     * permalink payload to. Falls back to {baseUrl}/checkout/cart, which is
+     * where Magento's own add-to-cart links resolve.
+     */
+    public function getPermalinkEndpoint(): string
+    {
+        $configured = trim((string) $this->scopeConfig->getValue(
+            self::XML_PATH_PERMALINK_ENDPOINT,
+            ScopeInterface::SCOPE_STORE
+        ));
+
+        if ($configured !== '') {
+            $endpoint = rtrim($configured, '/');
+            $this->warnIfNotHttps($endpoint, 'configured permalink endpoint');
+            return $endpoint;
+        }
+
+        try {
+            $baseUrl = $this->storeManager->getStore()->getBaseUrl();
+        } catch (\Throwable $e) {
+            $this->logger->error(
+                '[Angeo_Ucp] Failed to resolve store base URL for the permalink '
+                . 'endpoint: ' . $e->getMessage()
+            );
+            return '';
+        }
+
+        $endpoint = rtrim($baseUrl, '/') . '/checkout/cart';
+        $this->warnIfNotHttps($endpoint, 'derived permalink endpoint');
+        return $endpoint;
+    }
+
     // ── Extensions ────────────────────────────────────────────────────────────
 
     public function isFulfillmentDeclared(): bool
@@ -134,6 +202,15 @@ class Config
     public function isDiscountDeclared(): bool
     {
         return $this->getFlag(self::XML_PATH_EXT_DISCOUNT);
+    }
+
+    /**
+     * dev.ucp.shopping.buyer_consent — new extension in 2026-08-25.
+     * Extends cart and/or checkout; pruned when neither parent is declared.
+     */
+    public function isBuyerConsentDeclared(): bool
+    {
+        return $this->getFlag(self::XML_PATH_EXT_BUYER_CONSENT);
     }
 
     /**
@@ -350,9 +427,24 @@ class Config
     // ── Signing keys ──────────────────────────────────────────────────────────
 
     /**
-     * @return array<int, array<string, string>> Public JWK keys (no private material).
+     * Public JWKs for the profile's top-level `keys[]` array (RFC 7517 JWK Set).
+     *
+     * Renamed from getPublicSigningKeys() in 2.0.0 to match the spec field.
+     * Validation now follows profile.json#/$defs/jwk_public_key at tag
+     * v2026-08-25, which is materially different from 1.x:
+     *
+     *  - only `kid` and `kty` are universally REQUIRED;
+     *  - EC keys additionally require crv/x/y, OKP keys require crv/x —
+     *    so an Ed25519 key (no `y`) is valid and 1.x wrongly discarded it;
+     *  - `alg` MUST match `crv` for the well-known curves (ES256/P-256,
+     *    ES384/P-384, EdDSA/Ed25519); a mismatch fails schema validation;
+     *  - the kty/crv/alg vocabularies are OPEN — an unrecognised key type
+     *    MUST NOT cause whole-profile rejection, so unknown types are
+     *    published as-is rather than dropped.
+     *
+     * @return array<int, array<string, string>> Public JWKs (no private material).
      */
-    public function getPublicSigningKeys(): array
+    public function getPublicKeys(): array
     {
         $stored = (string) $this->scopeConfig->getValue(
             self::XML_PATH_SIGNING_KEY_JWK,
@@ -392,26 +484,38 @@ class Config
                 }
             }
 
-            if ($this->isValidPublicJwk($key)) {
+            $problem = $this->describeInvalidJwk($key);
+            if ($problem === '') {
                 $sanitized[] = $key;
             } else {
-                $this->logger->warning(
-                    '[Angeo_Ucp] Stored JWK entry is missing required fields '
-                    . '(kid/kty/crv/x/y); skipping. Run angeo:ucp:keys:generate to regenerate.'
-                );
+                $this->logger->warning(sprintf(
+                    '[Angeo_Ucp] Stored JWK entry is not a valid public key (%s); '
+                    . 'skipping. Run angeo:ucp:keys:generate to regenerate.',
+                    $problem
+                ));
             }
         }
 
         if ($hadPrivateMaterial) {
             $this->logger->warning(
                 '[Angeo_Ucp] Stored UCP signing key contained private fields '
-                . '(d/p/q/dp/dq/qi). These were stripped before serving the '
+                . '(d/p/q/dp/dq/qi/oth/k). These were stripped before serving the '
                 . 'profile, but you should rotate the affected key immediately: '
                 . 'bin/magento angeo:ucp:keys:generate --force.'
             );
         }
 
         return $sanitized;
+    }
+
+    /**
+     * @deprecated 2.0.0 Use getPublicKeys(). The profile field is `keys`,
+     *             not `signing_keys`, as of protocol version 2026-08-25.
+     * @return array<int, array<string, string>>
+     */
+    public function getPublicSigningKeys(): array
+    {
+        return $this->getPublicKeys();
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -445,18 +549,59 @@ class Config
     }
 
     /**
-     * Validate that a JWK array contains the minimum required public fields.
+     * Required members per key type (profile.json#/$defs/jwk_public_key).
+     * Absent from this map = open vocabulary: kid + kty only.
+     */
+    private const JWK_REQUIRED_BY_KTY = [
+        'EC'  => ['crv', 'x', 'y'],
+        'OKP' => ['crv', 'x'],
+    ];
+
+    /** Curve -> the only `alg` the schema permits alongside it. */
+    private const JWK_ALG_BY_CRV = [
+        'P-256'   => 'ES256',
+        'P-384'   => 'ES384',
+        'Ed25519' => 'EdDSA',
+    ];
+
+    /**
+     * Validate a public JWK against profile.json#/$defs/jwk_public_key.
      *
      * @param array<string, mixed> $key
+     * @return string Empty string when valid; otherwise the reason to log.
      */
-    private function isValidPublicJwk(array $key): bool
+    private function describeInvalidJwk(array $key): string
     {
-        foreach (['kid', 'kty', 'crv', 'x', 'y'] as $required) {
+        foreach (['kid', 'kty'] as $required) {
             if (!isset($key[$required]) || !is_string($key[$required]) || $key[$required] === '') {
-                return false;
+                return sprintf('missing required member "%s"', $required);
             }
         }
-        return true;
+
+        $kty = (string) $key['kty'];
+
+        foreach (self::JWK_REQUIRED_BY_KTY[$kty] ?? [] as $required) {
+            if (!isset($key[$required]) || !is_string($key[$required]) || $key[$required] === '') {
+                return sprintf('%s key is missing required member "%s"', $kty, $required);
+            }
+        }
+
+        $crv = isset($key['crv']) && is_string($key['crv']) ? $key['crv'] : null;
+        $alg = isset($key['alg']) && is_string($key['alg']) ? $key['alg'] : null;
+
+        if ($crv !== null && $alg !== null
+            && isset(self::JWK_ALG_BY_CRV[$crv])
+            && self::JWK_ALG_BY_CRV[$crv] !== $alg
+        ) {
+            return sprintf(
+                'alg "%s" contradicts crv "%s" (the schema pins %s)',
+                $alg,
+                $crv,
+                self::JWK_ALG_BY_CRV[$crv]
+            );
+        }
+
+        return '';
     }
 
     /**

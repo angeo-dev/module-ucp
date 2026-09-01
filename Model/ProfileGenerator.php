@@ -12,48 +12,51 @@ use Angeo\Ucp\Api\ProfileGeneratorInterface;
 use Angeo\Ucp\Api\ServiceBindingProviderInterface;
 
 /**
- * Builds the UCP business profile per spec version 2026-04-08.
+ * Builds the UCP business profile per spec version 2026-08-25.
  *
- * Verified against the live spec at https://ucp.dev/2026-04-08/specification/:
+ * What changed versus the 2026-04-08 profile this class produced in 1.x
+ * (all verified against Universal-Commerce-Protocol/ucp at tag v2026-08-25):
  *
- *  - Catalog is split into TWO granular capabilities:
- *      dev.ucp.shopping.catalog.search  (spec /specification/catalog/search/)
- *      dev.ucp.shopping.catalog.lookup  (spec /specification/catalog/lookup/)
- *    A single "dev.ucp.shopping.catalog" capability does not exist in the spec.
+ *  - SIGNING KEYS MOVED. The canonical field is now the top-level `keys[]`
+ *    array, an RFC 7517 JWK Set (schemas/profile.json#/$defs/base). The
+ *    1.x field `signing_keys` is no longer read by any verifier, so a
+ *    profile that still uses it publishes no usable keys at all. The
+ *    overview is explicit that a key is not effectively revoked until it is
+ *    absent from `keys[]` — which also means it is not effectively
+ *    PUBLISHED until it is present there.
  *
- *  - Extensions declare their parent(s) via `extends` and MUST NOT be
- *    advertised when no parent capability is in the profile (the spec's
- *    "prune orphaned extensions" rule applies to negotiation; advertising an
- *    orphan would always be pruned, so we never emit one):
- *      dev.ucp.shopping.fulfillment  extends checkout
- *      dev.ucp.shopping.discount     extends checkout and/or cart (multi-parent)
+ *  - DOCUMENTATION TREE MOVED. Catalog, cart, checkout and order now sit
+ *    under /specification/shopping/; fulfillment, discount and the new
+ *    buyer_consent under /specification/shopping/extensions/. All URLs are
+ *    centralised in Model\Spec.
  *
- *  - identity_linking lives under dev.ucp.common and MAY carry config.scopes.
+ *  - `schema` IS NOW REQUIRED on every business capability
+ *    (capability.json#/$defs/business_schema adds required: ["schema"]),
+ *    because platforms fetch and compose it during negotiation. Every entry
+ *    this class emits carries one.
  *
- *  - supported_versions (map version → profile URI) SHOULD be published by
- *    businesses that support older protocol versions.
+ *  - AUTHORITY BINDING is now a MUST: a platform rejects any entity whose
+ *    `schema` host, label-reversed, is not a prefix of the entity name. All
+ *    dev.ucp.* schema URLs are therefore hard-coded to ucp.dev rather than
+ *    derived from configuration. See Model\AuthorityBinding.
  *
- * Verified against the official JSON Schemas in the spec repository
- * (Universal-Commerce-Protocol/ucp, tag v2026-04-08):
+ *  - NEW ENTRIES: dev.ucp.shopping.permalink (root capability, carries
+ *    config.endpoint) and dev.ucp.shopping.buyer_consent (extension of
+ *    cart and/or checkout).
  *
- *  - business_schema REQUIRES the `services` and `payment_handlers` keys of
- *    the `ucp` object to be present, even when empty
- *    (source/schemas/ucp.json#/$defs/business_schema).
+ * Unchanged from 1.x and re-verified at the new tag:
  *
- *  - `services`, `capabilities`, and `payment_handlers` are JSON OBJECTS
- *    keyed by reverse-domain name. Empty registries must serialize as `{}`,
- *    never `[]`.
+ *  - business_schema still REQUIRES the `services` and `payment_handlers`
+ *    keys of the `ucp` object even when empty (ucp.json#/$defs/business_schema),
+ *    and all three registries are JSON OBJECTS keyed by reverse-domain name,
+ *    so empty registries must serialize as `{}` and never `[]`.
  *
- *  - `signing_keys` is a TOP-LEVEL sibling of `ucp`
- *    (source/discovery/profile_schema.json#/$defs/base).
- *
- *  - each payment handler entry requires `id` and `version`
- *    (source/schemas/payment_handler.json#/$defs/base).
+ *  - `capabilities` remains OPTIONAL; extensions are still pruned when
+ *    orphaned; identity_linking still lives under dev.ucp.common with
+ *    config.scopes as an object map.
  */
 class ProfileGenerator implements ProfileGeneratorInterface
 {
-    private const SPEC_BASE = 'https://ucp.dev/2026-04-08';
-
     /**
      * @param ServiceBindingProviderInterface[] $serviceBindingProviders
      *        Pool of transport binding providers collected via di.xml.
@@ -91,9 +94,13 @@ class ProfileGenerator implements ProfileGeneratorInterface
 
         $profile = ['ucp' => $ucp];
 
-        $keys = $this->config->getPublicSigningKeys();
+        // Spec 2026-08-25: signing keys are published in the top-level
+        // `keys[]` JWK Set. This is the ONLY field UCP verifiers read, and
+        // it also makes the profile document a valid RFC 7517 JWK Set that
+        // a signer can reuse as its Web Bot Auth key source.
+        $keys = $this->config->getPublicKeys();
         if ($keys !== []) {
-            $profile['signing_keys'] = $keys;
+            $profile['keys'] = $keys;
         }
 
         return $profile;
@@ -166,56 +173,51 @@ class ProfileGenerator implements ProfileGeneratorInterface
         // ── Root capabilities ────────────────────────────────────────────────
 
         if ($this->config->isCatalogSearchDeclared()) {
-            $capabilities['dev.ucp.shopping.catalog.search'] = [[
-                'version' => $version,
-                'spec'    => self::SPEC_BASE . '/specification/catalog/search',
-                'schema'  => self::SPEC_BASE . '/schemas/shopping/catalog_search.json',
-            ]];
+            $capabilities['dev.ucp.shopping.catalog.search'] =
+                [Spec::capability('dev.ucp.shopping.catalog.search', $version)];
         }
 
         if ($this->config->isCatalogLookupDeclared()) {
-            $capabilities['dev.ucp.shopping.catalog.lookup'] = [[
-                'version' => $version,
-                'spec'    => self::SPEC_BASE . '/specification/catalog/lookup',
-                'schema'  => self::SPEC_BASE . '/schemas/shopping/catalog_lookup.json',
-            ]];
+            $capabilities['dev.ucp.shopping.catalog.lookup'] =
+                [Spec::capability('dev.ucp.shopping.catalog.lookup', $version)];
         }
 
         $cartDeclared = $this->config->isCartDeclared();
         if ($cartDeclared) {
-            $capabilities['dev.ucp.shopping.cart'] = [[
-                'version' => $version,
-                'spec'    => self::SPEC_BASE . '/specification/cart',
-                'schema'  => self::SPEC_BASE . '/schemas/shopping/cart.json',
-            ]];
+            $capabilities['dev.ucp.shopping.cart'] =
+                [Spec::capability('dev.ucp.shopping.cart', $version)];
         }
 
         $checkoutDeclared = $this->config->isCheckoutDeclared();
         if ($checkoutDeclared) {
-            $capabilities['dev.ucp.shopping.checkout'] = [[
-                'version' => $version,
-                'spec'    => self::SPEC_BASE . '/specification/checkout',
-                'schema'  => self::SPEC_BASE . '/schemas/shopping/checkout.json',
-            ]];
+            $capabilities['dev.ucp.shopping.checkout'] =
+                [Spec::capability('dev.ucp.shopping.checkout', $version)];
         }
 
         if ($this->config->isOrderDeclared()) {
-            $capabilities['dev.ucp.shopping.order'] = [[
-                'version' => $version,
-                'spec'    => self::SPEC_BASE . '/specification/order',
-                'schema'  => self::SPEC_BASE . '/schemas/shopping/order.json',
-            ]];
+            $capabilities['dev.ucp.shopping.order'] =
+                [Spec::capability('dev.ucp.shopping.order', $version)];
+        }
+
+        // Permalink (new in 2026-08-25): a buyable URL an agent can hand to
+        // the shopper. config.endpoint is where that URL is rooted; without
+        // it the capability tells an agent nothing actionable, so it is only
+        // advertised once an endpoint resolves.
+        if ($this->config->isPermalinkDeclared()) {
+            $permalinkEndpoint = $this->config->getPermalinkEndpoint();
+            if ($permalinkEndpoint !== '') {
+                $permalink = Spec::capability('dev.ucp.shopping.permalink', $version);
+                $permalink['config'] = ['endpoint' => $permalinkEndpoint];
+                $capabilities['dev.ucp.shopping.permalink'] = [$permalink];
+            }
         }
 
         if ($this->config->isIdentityLinkingDeclared()) {
-            $identity = [
-                'version' => $version,
-                'spec'    => self::SPEC_BASE . '/specification/identity-linking',
-                'schema'  => self::SPEC_BASE . '/schemas/common/identity_linking.json',
-            ];
+            $identity = Spec::capability('dev.ucp.common.identity_linking', $version);
 
             $scopes = $this->config->getIdentityLinkingScopes();
             if ($scopes !== []) {
+                // Scope values encode as empty JSON objects, per the spec example.
                 $scopeMap = [];
                 foreach ($scopes as $scope) {
                     $scopeMap[$scope] = new \stdClass();
@@ -226,37 +228,63 @@ class ProfileGenerator implements ProfileGeneratorInterface
             $capabilities['dev.ucp.common.identity_linking'] = [$identity];
         }
 
-        // ── Extensions (never advertised without a parent — orphaned
-        //    extensions are always pruned during negotiation, so emitting
-        //    them would be spec-noncompliant noise) ───────────────────────────
+        // ── Extensions ───────────────────────────────────────────────────────
+        //
+        // An extension is never advertised without a parent: negotiation
+        // prunes orphans in every case, so emitting one is guaranteed dead
+        // weight. `extends` is a string for a single parent and an array for
+        // several, exactly as the spec examples show.
 
         if ($this->config->isFulfillmentDeclared() && $checkoutDeclared) {
-            $capabilities['dev.ucp.shopping.fulfillment'] = [[
-                'version' => $version,
-                'spec'    => self::SPEC_BASE . '/specification/fulfillment',
-                'schema'  => self::SPEC_BASE . '/schemas/shopping/fulfillment.json',
-                'extends' => 'dev.ucp.shopping.checkout',
-            ]];
+            $fulfillment = Spec::capability('dev.ucp.shopping.fulfillment', $version);
+            $fulfillment['extends'] = 'dev.ucp.shopping.checkout';
+            $capabilities['dev.ucp.shopping.fulfillment'] = [$fulfillment];
         }
 
-        if ($this->config->isDiscountDeclared() && ($checkoutDeclared || $cartDeclared)) {
-            $parents = [];
-            if ($checkoutDeclared) {
-                $parents[] = 'dev.ucp.shopping.checkout';
-            }
-            if ($cartDeclared) {
-                $parents[] = 'dev.ucp.shopping.cart';
-            }
+        $checkoutOrCart = self::parents($checkoutDeclared, $cartDeclared);
 
-            $capabilities['dev.ucp.shopping.discount'] = [[
-                'version' => $version,
-                'spec'    => self::SPEC_BASE . '/specification/discount',
-                'schema'  => self::SPEC_BASE . '/schemas/shopping/discount.json',
-                // Single parent → string; multiple parents → array (per spec).
-                'extends' => count($parents) === 1 ? $parents[0] : $parents,
-            ]];
+        if ($this->config->isDiscountDeclared() && $checkoutOrCart !== []) {
+            $discount = Spec::capability('dev.ucp.shopping.discount', $version);
+            $discount['extends'] = self::extendsValue($checkoutOrCart);
+            $capabilities['dev.ucp.shopping.discount'] = [$discount];
+        }
+
+        // Buyer consent (new in 2026-08-25) extends cart and/or checkout.
+        if ($this->config->isBuyerConsentDeclared() && $checkoutOrCart !== []) {
+            $consent = Spec::capability('dev.ucp.shopping.buyer_consent', $version);
+            $consent['extends'] = self::extendsValue($checkoutOrCart);
+            $capabilities['dev.ucp.shopping.buyer_consent'] = [$consent];
         }
 
         return $capabilities;
+    }
+
+    /**
+     * Parents shared by the discount and buyer_consent extensions.
+     *
+     * @return array<int, string>
+     */
+    private static function parents(bool $checkout, bool $cart): array
+    {
+        $parents = [];
+        if ($checkout) {
+            $parents[] = 'dev.ucp.shopping.checkout';
+        }
+        if ($cart) {
+            $parents[] = 'dev.ucp.shopping.cart';
+        }
+
+        return $parents;
+    }
+
+    /**
+     * Single parent encodes as a string, several as an array (spec:
+     * capability.json#/$defs/business_schema `extends` is a oneOf).
+     *
+     * @param array<int, string> $parents
+     */
+    private static function extendsValue(array $parents): string|array
+    {
+        return count($parents) === 1 ? $parents[0] : $parents;
     }
 }

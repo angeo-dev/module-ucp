@@ -126,12 +126,76 @@ final class JwkFormatterTest extends TestCase
     }
 
     #[Test]
-    public function rejects_empty_kid(): void
+    public function empty_kid_derives_the_rfc7638_thumbprint(): void
     {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessageMatches('/kid must not be empty/');
+        // 1.x threw on an empty kid. 2.0.0 derives the RFC 7638 JWK
+        // thumbprint instead, because the spec REQUIRES the thumbprint form
+        // for keys used in dual-audience Web Bot Auth signatures.
+        $jwk = $this->formatter->publicKeyToJwk(self::$keypair['public'], '');
 
-        $this->formatter->publicKeyToJwk(self::$keypair['public'], '');
+        self::assertNotSame('', $jwk['kid']);
+        self::assertSame($this->formatter->thumbprint($jwk), $jwk['kid']);
+    }
+
+    #[Test]
+    public function thumbprint_matches_the_published_spec_example(): void
+    {
+        // Test vector: the Ed25519 key in the business-profile example of
+        // https://ucp.dev/2026-08-25/specification/overview/ — its kid is
+        // stated to be the RFC 7638 thumbprint of the key itself.
+        $thumbprint = $this->formatter->thumbprint([
+            'kty' => 'OKP',
+            'crv' => 'Ed25519',
+            'x'   => 'JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs',
+        ]);
+
+        self::assertSame('poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U', $thumbprint);
+    }
+
+    #[Test]
+    public function thumbprint_excludes_optional_members(): void
+    {
+        // RFC 7638 hashes ONLY the required members in lexicographic order.
+        // Including kid/use/alg would produce a digest no Web Bot Auth
+        // verifier could reproduce.
+        $bare = ['kty' => 'OKP', 'crv' => 'Ed25519', 'x' => 'JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs'];
+        $rich = $bare + ['kid' => 'something-else', 'use' => 'sig', 'alg' => 'EdDSA'];
+
+        self::assertSame(
+            $this->formatter->thumbprint($bare),
+            $this->formatter->thumbprint($rich)
+        );
+    }
+
+    #[Test]
+    public function ed25519_public_key_formats_as_an_okp_jwk_without_y(): void
+    {
+        if (!extension_loaded('sodium')) {
+            self::markTestSkipped('ext-sodium is not available.');
+        }
+
+        $publicKey = sodium_crypto_sign_publickey(sodium_crypto_sign_keypair());
+
+        $jwk = $this->formatter->ed25519PublicKeyToJwk($publicKey);
+
+        self::assertSame('OKP', $jwk['kty']);
+        self::assertSame('Ed25519', $jwk['crv']);
+        self::assertSame('EdDSA', $jwk['alg']);
+        // OKP keys carry no y coordinate — 1.x's validation wrongly demanded one.
+        self::assertArrayNotHasKey('y', $jwk);
+    }
+
+    #[Test]
+    public function ed25519_rejects_a_wrong_length_public_key(): void
+    {
+        if (!extension_loaded('sodium')) {
+            self::markTestSkipped('ext-sodium is not available.');
+        }
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/must be exactly 32 bytes/');
+
+        $this->formatter->ed25519PublicKeyToJwk(str_repeat("\0", 31));
     }
 
     private static function base64UrlDecode(string $value): string

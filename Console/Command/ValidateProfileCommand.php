@@ -9,6 +9,7 @@ declare(strict_types=1);
 namespace Angeo\Ucp\Console\Command;
 
 use Angeo\Ucp\Api\ProfileGeneratorInterface;
+use Angeo\Ucp\Model\AuthorityBinding;
 use Angeo\Ucp\Model\Config;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -18,25 +19,38 @@ use Symfony\Component\Console\Output\OutputInterface;
 /**
  * CLI: bin/magento angeo:ucp:validate
  *
- * Validates the generated UCP business profile against the 2026-04-08 spec
- * (checks derived from the official JSON Schemas in the spec repository,
- * tag v2026-04-08: discovery/profile_schema.json, schemas/ucp.json,
- * schemas/service.json, schemas/capability.json, schemas/payment_handler.json):
+ * Validates the generated business profile against the UCP 2026-08-25 spec.
+ * Every check below is derived from the official JSON Schemas in the spec
+ * repository at tag v2026-08-25 (schemas/profile.json, schemas/ucp.json,
+ * service.json, capability.json, payment_handler.json) plus the normative
+ * prose in specification/overview.
+ *
+ * Checks:
  *  - protocol version declared and correct
- *  - `services` and `payment_handlers` keys PRESENT in the ucp object
+ *  - `services` and `payment_handlers` PRESENT in the ucp object
  *    (business_schema: REQUIRED even when empty)
  *  - empty registries serialize as JSON objects `{}`, never arrays `[]`
  *  - registry keys match the reverse-domain pattern
- *  - every service binding has version + transport; REST/MCP/A2A bindings
- *    have an `endpoint` (business_schema: REQUIRED per transport)
- *  - all endpoint URLs use HTTPS (spec: endpoint MUST be HTTPS)
- *  - endpoints have no trailing slash (spec: SHOULD NOT)
- *  - every capability has `version` (REQUIRED); spec/schema recommended
- *  - dev.ucp.* capabilities have spec/schema origins on https://ucp.dev
- *    (spec: Spec URL Binding — origin MUST match namespace authority)
- *  - no orphaned extensions (every `extends` target is present in the profile)
- *  - every payment handler entry has `id` + `version` (REQUIRED)
- *  - signing keys carry no private material; kid/kty REQUIRED
+ *  - every service binding has version + transport; rest/mcp/a2a bindings
+ *    carry an `endpoint`; every endpoint is HTTPS with no trailing slash
+ *  - every capability has BOTH `version` and `schema`
+ *    (capability.json#/$defs/business_schema adds required: ["schema"] in
+ *    2026-08-25 — platforms fetch and compose it during negotiation, so a
+ *    capability without one cannot be activated)
+ *  - AUTHORITY BINDING on every `schema` URL, using the spec's derivation
+ *    algorithm rather than a string prefix (see Model\AuthorityBinding).
+ *    A platform MUST reject any entity that fails this, so a profile that
+ *    fails it locally is a profile whose capabilities silently disappear.
+ *  - `spec` URLs are https but NOT authority-bound: the 2026-08-25 spec
+ *    explicitly moved documentation off the machine trust path, so a docs
+ *    subdomain or third-party host is legitimate. 1.x rejected those.
+ *  - no orphaned extensions (every `extends` target is present)
+ *  - every payment handler entry has `id` + `version`
+ *  - keys published in the canonical top-level `keys[]`, validated per key
+ *    type (EC needs crv/x/y, OKP needs crv/x), with `alg` consistent with
+ *    `crv`, and carrying no private material
+ *  - the legacy 1.x `signing_keys` field is reported as an error: no UCP
+ *    verifier reads it, so a profile using it publishes no usable key
  *  - profile JSON-encodes under JSON_THROW_ON_ERROR
  *
  * Exit code 0 on pass (warnings allowed), 1 on failure.
@@ -54,7 +68,8 @@ class ValidateProfileCommand extends Command
     protected function configure(): void
     {
         $this->setName(self::NAME)
-            ->setDescription('Validate the generated UCP profile against the 2026-04-08 spec')
+            ->setDescription('Validate the generated UCP profile against the '
+                . Config::PROTOCOL_VERSION . ' spec')
             ->addOption(
                 'json',
                 null,
@@ -141,6 +156,19 @@ class ValidateProfileCommand extends Command
                         );
                     }
 
+                    // Service bindings that declare a schema are subject to
+                    // the same authority binding as capabilities.
+                    $bindingSchema = (string) ($binding['schema'] ?? '');
+                    if ($bindingSchema !== '') {
+                        [$bound, $reason] = AuthorityBinding::check(
+                            (string) $serviceName,
+                            $bindingSchema
+                        );
+                        if (!$bound) {
+                            $errors[] = 'Service "' . $serviceName . '": ' . $reason;
+                        }
+                    }
+
                     $endpoint = (string) ($binding['endpoint'] ?? '');
                     if ($endpoint !== '') {
                         if (!str_starts_with(strtolower($endpoint), 'https://')) {
@@ -177,40 +205,47 @@ class ValidateProfileCommand extends Command
                     continue;
                 }
                 foreach ($entries as $entry) {
-                    // Schema: only `version` is REQUIRED at business level.
-                    if (empty($entry['version'])) {
-                        $errors[] = sprintf(
-                            'Capability "%s" is missing required field "version".',
-                            $capName
-                        );
-                    }
-                    // spec/schema are optional in business profiles but
-                    // strongly recommended so agents can fetch definitions.
-                    foreach (['spec', 'schema'] as $recommended) {
-                        if (empty($entry[$recommended])) {
-                            $warnings[] = sprintf(
-                                'Capability "%s" has no "%s" URL (optional per '
-                                . 'business schema, but recommended).',
+                    // 2026-08-25: business capabilities REQUIRE version AND
+                    // schema. `schema` was optional at 2026-04-08; it is now
+                    // what the platform fetches and composes during
+                    // negotiation, so a capability without one is inert.
+                    foreach (['version', 'schema'] as $required) {
+                        if (empty($entry[$required])) {
+                            $errors[] = sprintf(
+                                'Capability "%s" is missing required field "%s" '
+                                . '(capability.json#/$defs/business_schema).',
                                 $capName,
-                                $recommended
+                                $required
                             );
                         }
                     }
 
-                    // Spec URL Binding: dev.ucp.* MUST point at https://ucp.dev.
-                    if (str_starts_with((string) $capName, 'dev.ucp.')) {
-                        foreach (['spec', 'schema'] as $urlField) {
-                            $url = (string) ($entry[$urlField] ?? '');
-                            if ($url !== '' && !str_starts_with($url, 'https://ucp.dev/')) {
-                                $errors[] = sprintf(
-                                    'Capability "%s" %s URL origin must be https://ucp.dev '
-                                    . '(spec: Spec URL Binding). Got: %s',
-                                    $capName,
-                                    $urlField,
-                                    $url
-                                );
-                            }
+                    if (empty($entry['spec'])) {
+                        $warnings[] = sprintf(
+                            'Capability "%s" has no "spec" URL. Optional, but it is '
+                            . 'the only human-readable pointer an integrator gets.',
+                            $capName
+                        );
+                    }
+
+                    // Authority binding applies to `schema` only.
+                    $schemaUrl = (string) ($entry['schema'] ?? '');
+                    if ($schemaUrl !== '') {
+                        [$bound, $reason] = AuthorityBinding::check((string) $capName, $schemaUrl);
+                        if (!$bound) {
+                            $errors[] = 'Capability "' . $capName . '": ' . $reason;
                         }
+                    }
+
+                    // `spec` is documentation, off the machine trust path:
+                    // it MUST be https but MAY live on any host.
+                    $specUrl = (string) ($entry['spec'] ?? '');
+                    if ($specUrl !== '' && !str_starts_with(strtolower($specUrl), 'https://')) {
+                        $errors[] = sprintf(
+                            'Capability "%s" spec URL must be https. Got: %s',
+                            $capName,
+                            $specUrl
+                        );
                     }
 
                     // Orphaned-extension check.
@@ -268,6 +303,19 @@ class ValidateProfileCommand extends Command
                         $handlerName
                     );
                 }
+
+                // Handlers declare a schema where the handler defines one;
+                // when present it is authority-bound like any other entity.
+                $handlerSchema = (string) ($entry['schema'] ?? '');
+                if ($handlerSchema !== '') {
+                    [$bound, $reason] = AuthorityBinding::check(
+                        (string) $handlerName,
+                        $handlerSchema
+                    );
+                    if (!$bound) {
+                        $errors[] = 'Payment handler "' . $handlerName . '": ' . $reason;
+                    }
+                }
             }
         }
 
@@ -285,29 +333,109 @@ class ValidateProfileCommand extends Command
         }
 
         // ── Signing keys ──────────────────────────────────────────────────
-        $signingKeys = $profile['signing_keys'] ?? [];
-        if ($capabilities === [] && $signingKeys === []) {
-            $warnings[] = 'Profile has no capabilities and no signing keys. '
-                . 'AI agents can discover the endpoint but cannot verify signed responses. '
-                . 'Run angeo:ucp:keys:generate to add a signing key.';
+        // 2026-08-25 moved keys to the canonical top-level `keys[]` JWK Set.
+        // A profile still using the 1.x `signing_keys` field publishes keys
+        // that no verifier will ever read.
+        if (array_key_exists('signing_keys', $profile)) {
+            $errors[] = 'Profile uses the legacy "signing_keys" field. Since '
+                . 'protocol version 2026-08-25 the canonical field is the '
+                . 'top-level "keys" array (RFC 7517 JWK Set); no UCP verifier '
+                . 'reads "signing_keys". Upgrade angeo/module-ucp, or move the '
+                . 'entries into "keys".';
         }
 
-        foreach ($signingKeys as $key) {
-            if (is_array($key)) {
-                // Schema (profile_schema.json#/$defs/signing_key): kid + kty REQUIRED.
-                foreach (['kid', 'kty'] as $requiredField) {
-                    if (empty($key[$requiredField])) {
-                        $errors[] = sprintf(
-                            'Signing key is missing required field "%s".',
-                            $requiredField
-                        );
-                    }
+        $keys = $profile['keys'] ?? [];
+        if (!is_array($keys)) {
+            $errors[] = 'Profile "keys" must be an array (an RFC 7517 JWK Set).';
+            $keys = [];
+        }
+
+        if ($capabilities === [] && $keys === []) {
+            $warnings[] = 'Profile has no capabilities and no signing keys. '
+                . 'AI agents can discover the endpoint but cannot verify signed '
+                . 'responses. Run angeo:ucp:keys:generate to publish a key.';
+        }
+
+        $seenKids = [];
+
+        foreach ($keys as $key) {
+            if (!is_array($key)) {
+                $errors[] = 'Every entry in "keys" must be a JWK object.';
+                continue;
+            }
+
+            // profile.json#/$defs/jwk_public_key: kid + kty always REQUIRED.
+            foreach (['kid', 'kty'] as $requiredField) {
+                if (empty($key[$requiredField]) || !is_string($key[$requiredField])) {
+                    $errors[] = sprintf(
+                        'Public key is missing required member "%s".',
+                        $requiredField
+                    );
                 }
             }
-            if (is_array($key) && array_intersect_key($key, array_flip(['d', 'p', 'q', 'dp', 'dq', 'qi'])) !== []) {
+
+            $kid = (string) ($key['kid'] ?? 'unknown');
+            $kty = (string) ($key['kty'] ?? '');
+            $crv = isset($key['crv']) && is_string($key['crv']) ? $key['crv'] : '';
+            $alg = isset($key['alg']) && is_string($key['alg']) ? $key['alg'] : '';
+
+            // Consumers select keys by kid, so a duplicate makes resolution
+            // ambiguous even though each entry validates on its own.
+            if ($kid !== 'unknown') {
+                if (isset($seenKids[$kid])) {
+                    $errors[] = sprintf(
+                        'Duplicate kid "%s" in keys[]. Consumers resolve keys by '
+                        . 'kid, so duplicates make verification ambiguous.',
+                        $kid
+                    );
+                }
+                $seenKids[$kid] = true;
+            }
+
+            // Per-type required members.
+            $requiredByKty = ['EC' => ['crv', 'x', 'y'], 'OKP' => ['crv', 'x']];
+            foreach ($requiredByKty[$kty] ?? [] as $member) {
+                if (empty($key[$member]) || !is_string($key[$member])) {
+                    $errors[] = sprintf(
+                        'Key "%s" (%s) is missing required member "%s".',
+                        $kid,
+                        $kty,
+                        $member
+                    );
+                }
+            }
+
+            // The schema pins alg to crv for every well-known curve.
+            $algByCrv = ['P-256' => 'ES256', 'P-384' => 'ES384', 'Ed25519' => 'EdDSA'];
+            if ($crv !== '' && $alg !== ''
+                && isset($algByCrv[$crv]) && $algByCrv[$crv] !== $alg
+            ) {
                 $errors[] = sprintf(
-                    'Signing key "%s" contains PRIVATE key material. Rotate the key immediately.',
-                    (string) ($key['kid'] ?? 'unknown')
+                    'Key "%s" declares alg "%s" with crv "%s"; the schema pins %s.',
+                    $kid,
+                    $alg,
+                    $crv,
+                    $algByCrv[$crv]
+                );
+            }
+
+            if ($kty !== '' && !in_array($kty, ['EC', 'OKP'], true)) {
+                $warnings[] = sprintf(
+                    'Key "%s" uses key type "%s", which is outside the two '
+                    . 'well-known UCP types (EC, OKP). The vocabulary is open, '
+                    . 'so this is legal — but verifiers that do not recognise it '
+                    . 'will skip the key.',
+                    $kid,
+                    $kty
+                );
+            }
+
+            $privateFields = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'];
+            if (array_intersect_key($key, array_flip($privateFields)) !== []) {
+                $errors[] = sprintf(
+                    'Key "%s" contains PRIVATE key material. The profile is public: '
+                    . 'rotate this key immediately.',
+                    $kid
                 );
             }
         }
@@ -334,11 +462,11 @@ class ValidateProfileCommand extends Command
 
         $output->writeln('<info>UCP profile validation passed.</info>');
         $output->writeln(sprintf(
-            '  ✓ Protocol %s | %d service binding(s) | %d capability(ies) | %d signing key(s)',
+            '  ✓ Protocol %s | %d service binding(s) | %d capability(ies) | %d published key(s)',
             Config::PROTOCOL_VERSION,
             count($services),
             is_array($capabilities) ? count($capabilities) : 0,
-            count($signingKeys)
+            count($keys)
         ));
 
         if ($input->getOption('json')) {

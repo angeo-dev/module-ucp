@@ -22,10 +22,10 @@ use Psr\Log\NullLogger;
 #[CoversClass(Config::class)]
 final class ConfigTest extends TestCase
 {
-    // ── getPublicSigningKeys ──────────────────────────────────────────────────
+    // ── getPublicKeys ──────────────────────────────────────────────────
 
     #[Test]
-    public function getPublicSigningKeys_strips_private_key_fields(): void
+    public function getPublicKeys_strips_private_key_fields(): void
     {
         $contaminatedJwk = [[
             'kid' => 'leak-test',
@@ -39,7 +39,7 @@ final class ConfigTest extends TestCase
         ]];
         $config = $this->buildConfig(jwkJson: json_encode($contaminatedJwk));
 
-        $keys = $config->getPublicSigningKeys();
+        $keys = $config->getPublicKeys();
 
         self::assertCount(1, $keys);
         self::assertArrayNotHasKey('d', $keys[0]);
@@ -49,7 +49,7 @@ final class ConfigTest extends TestCase
     }
 
     #[Test]
-    public function getPublicSigningKeys_logs_warning_when_private_fields_stripped(): void
+    public function getPublicKeys_logs_warning_when_private_fields_stripped(): void
     {
         $contaminatedJwk = [[
             'kid' => 'leak-test',
@@ -69,30 +69,30 @@ final class ConfigTest extends TestCase
             logger: $logger
         );
 
-        $config->getPublicSigningKeys();
+        $config->getPublicKeys();
     }
 
     #[Test]
-    public function getPublicSigningKeys_returns_empty_array_for_blank_config(): void
+    public function getPublicKeys_returns_empty_array_for_blank_config(): void
     {
         $config = $this->buildConfig(jwkJson: '');
 
-        self::assertSame([], $config->getPublicSigningKeys());
+        self::assertSame([], $config->getPublicKeys());
     }
 
     #[Test]
-    public function getPublicSigningKeys_returns_empty_array_for_invalid_json(): void
+    public function getPublicKeys_returns_empty_array_for_invalid_json(): void
     {
         $logger = $this->createMock(LoggerInterface::class);
         $logger->expects(self::once())->method('warning');
 
         $config = $this->buildConfig(jwkJson: '{not valid json', logger: $logger);
 
-        self::assertSame([], $config->getPublicSigningKeys());
+        self::assertSame([], $config->getPublicKeys());
     }
 
     #[Test]
-    public function getPublicSigningKeys_skips_entries_missing_required_fields(): void
+    public function getPublicKeys_skips_entries_missing_required_fields(): void
     {
         // Entry missing 'y' coordinate — should be rejected.
         $incomplete = [[
@@ -109,7 +109,7 @@ final class ConfigTest extends TestCase
 
         $config = $this->buildConfig(jwkJson: json_encode($incomplete), logger: $logger);
 
-        self::assertSame([], $config->getPublicSigningKeys());
+        self::assertSame([], $config->getPublicKeys());
     }
 
     // ── getRestEndpoint ───────────────────────────────────────────────────────
@@ -268,7 +268,7 @@ final class ConfigTest extends TestCase
     #[Test]
     public function getPaymentHandlers_accepts_json_object(): void
     {
-        $json = '{"com.example.tokenizer": [{"id": "t1", "version": "2026-04-08"}]}';
+        $json = '{"com.example.tokenizer": [{"id": "t1", "version": "2026-08-25"}]}';
         $config = $this->buildConfig(paymentHandlers: $json);
 
         $handlers = $config->getPaymentHandlers();
@@ -283,8 +283,8 @@ final class ConfigTest extends TestCase
         // requires `version` (YYYY-MM-DD). Entries lacking either are
         // dropped so the served profile always validates.
         $json = '{"com.example.tokenizer": ['
-            . '{"id": "ok", "version": "2026-04-08"},'
-            . '{"version": "2026-04-08"},'
+            . '{"id": "ok", "version": "2026-08-25"},'
+            . '{"version": "2026-08-25"},'
             . '{"id": "bad_version", "version": "v1"}'
             . ']}';
         $logger = $this->createMock(LoggerInterface::class);
@@ -300,7 +300,7 @@ final class ConfigTest extends TestCase
     #[Test]
     public function getPaymentHandlers_rejects_non_reverse_domain_keys(): void
     {
-        $json = '{"NotReverseDomain": [{"id": "t1", "version": "2026-04-08"}]}';
+        $json = '{"NotReverseDomain": [{"id": "t1", "version": "2026-08-25"}]}';
         $logger = $this->createMock(LoggerInterface::class);
         $logger->expects(self::once())
             ->method('warning')
@@ -314,7 +314,7 @@ final class ConfigTest extends TestCase
     #[Test]
     public function getPaymentHandlers_wraps_single_entry_object_into_list(): void
     {
-        $json   = '{"com.example.pay": {"id": "t1", "version": "2026-04-08"}}';
+        $json   = '{"com.example.pay": {"id": "t1", "version": "2026-08-25"}}';
         $config = $this->buildConfig(paymentHandlers: $json);
 
         $handlers = $config->getPaymentHandlers();

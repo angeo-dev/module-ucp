@@ -20,10 +20,13 @@
                 <order_enabled>0</order_enabled>
                 <identity_linking_enabled>0</identity_linking_enabled>
                 <identity_linking_scopes></identity_linking_scopes>
+                <permalink_enabled>0</permalink_enabled>
+                <permalink_endpoint></permalink_endpoint>
             </capabilities>
             <extensions>
                 <fulfillment_enabled>0</fulfillment_enabled>
                 <discount_enabled>0</discount_enabled>
+                <buyer_consent_enabled>0</buyer_consent_enabled>
             </extensions>
             <transport>
                 <rest_endpoint></rest_endpoint>

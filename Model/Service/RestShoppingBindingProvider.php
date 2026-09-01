@@ -10,18 +10,22 @@ namespace Angeo\Ucp\Model\Service;
 
 use Angeo\Ucp\Api\ServiceBindingProviderInterface;
 use Angeo\Ucp\Model\Config;
+use Angeo\Ucp\Model\Spec;
 
 /**
  * REST transport binding for the dev.ucp.shopping service.
  *
- * Extracted from ProfileGenerator::buildServices() (pre-1.4.0) unchanged:
- * emits a single `rest` binding when a REST endpoint is available
+ * Emits a single `rest` binding when a REST endpoint is available
  * (explicitly configured, or derived from the store base URL).
+ *
+ * 2.0.0: the spec/schema URLs now come from Model\Spec, which pins them to
+ * the 2026-08-25 tree. Per the service.json description at that tag,
+ * `version` identifies the SERVICE, not the transport — the binding has no
+ * separate version, and the OpenAPI artifact's own info.version is release
+ * metadata rather than something to negotiate.
  */
 class RestShoppingBindingProvider implements ServiceBindingProviderInterface
 {
-    private const SPEC_BASE = 'https://ucp.dev/2026-04-08';
-
     public function __construct(
         private readonly Config $config
     ) {
@@ -38,10 +42,10 @@ class RestShoppingBindingProvider implements ServiceBindingProviderInterface
             Config::SHOPPING_SERVICE_NAME => [
                 [
                     'version'   => $protocolVersion,
-                    'spec'      => self::SPEC_BASE . '/specification/overview',
+                    'spec'      => Spec::SERVICE_SPEC,
                     'transport' => 'rest',
                     'endpoint'  => $endpoint,
-                    'schema'    => self::SPEC_BASE . '/services/shopping/rest.openapi.json',
+                    'schema'    => Spec::SERVICE_REST_SCHEMA,
                 ],
             ],
         ];

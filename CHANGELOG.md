@@ -4,6 +4,167 @@ All notable changes to `angeo/module-ucp` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-08-28
+
+Adopts UCP spec release **2026-08-25**, published on 25 August 2026 — the
+first new dated release since 2026-04-08. This is a major version because the
+profile's key field changed name and the advertised protocol version changed;
+both are visible to every platform that fetches `/.well-known/ucp`.
+
+Everything below was verified against `Universal-Commerce-Protocol/ucp` at
+tag `v2026-08-25`, and the profiles this module generates are validated in CI
+against that tag's official JSON Schemas.
+
+### A note on what 1.4.0 actually was
+
+1.4.0 was **not** broken. Its profile was, and still is, a valid
+`2026-04-08` business profile — `signing_keys` was the correct field for that
+release, and the spec explicitly allows a business to keep serving an older
+version. Staying on 1.4.0 is a legitimate choice.
+
+What 1.4.0 cannot do is advertise `2026-08-25`. The two releases disagree
+about where keys live and where capability documentation lives, so adopting
+the new version means adopting all of it at once. That is what this release
+does.
+
+### Changed — BREAKING
+
+- **Protocol version is now `2026-08-25`** (`Config::PROTOCOL_VERSION`). The
+  previous value is retained as `Config::PREVIOUS_PROTOCOL_VERSION` for
+  migration tooling.
+
+- **Signing keys moved from `signing_keys` to the top-level `keys[]` array.**
+  Per `schemas/profile.json#/$defs/base` at the new tag, `keys[]` is the
+  canonical field and "this is where every UCP verifier reads them". It is an
+  RFC 7517 JWK Set, which makes the profile document simultaneously a valid
+  JWK Set that a signer can reuse as its Web Bot Auth key source. A profile
+  advertising `2026-08-25` while still using `signing_keys` publishes keys
+  nothing will read — `angeo:ucp:validate` now reports that as an error.
+  No configuration change is needed: the stored JWKs are re-published under
+  the new field automatically.
+
+- **All capability `spec` URLs moved.** The documentation tree was
+  reorganised: catalog, cart, checkout and order now live under
+  `/specification/shopping/`, and fulfillment, discount and buyer_consent
+  under `/specification/shopping/extensions/`. Every URL the profile emits is
+  now centralised in the new `Model\Spec` class rather than assembled from
+  string fragments in three different files.
+
+- **`Config::getPublicSigningKeys()` is deprecated** in favour of
+  `getPublicKeys()`. The old method still works and forwards to the new one.
+
+- **Reverse-domain pattern widened** to the pattern in
+  `schemas/common/types/reverse_domain_name.json` at the new tag. The 1.x
+  pattern rejected names the spec lists as valid — interior hyphens
+  (`com.example-shop.checkout`), leading digits after the first segment
+  (`com.2example.cart`), and punycode TLDs (`xn--p1ai.example.checkout`).
+  A payment handler or third-party service binding using any of those was
+  silently dropped from the profile under 1.x.
+
+### Added
+
+- **`Model\AuthorityBinding`** — the spec's authority-binding derivation
+  algorithm, implemented as specified rather than as a string prefix test.
+  2026-08-25 makes this a MUST: a platform validates every declared `schema`
+  URL and **rejects the entity outright** when the URL's label-reversed host
+  is not the entity name or a label-aligned prefix of it. A capability that
+  fails is treated as not present and never activated, silently. The
+  implementation handles the cases the spec calls out explicitly — userinfo
+  decoys (`https://ucp.dev@evil.example/x.json` has host `evil.example`),
+  IP-literal and single-label hosts, and near-miss namespaces
+  (`com.examplecorp` vs `com.example`). `angeo:ucp:validate` runs it over
+  every capability, service binding and payment handler.
+
+- **Ed25519 (OKP) and P-384 signing keys.**
+  `angeo:ucp:keys:generate --type=ed25519|es384|es256`. The spec RECOMMENDS
+  Ed25519 for signers opting into Web Bot Auth interop on HTTP transport;
+  ES256 remains the universal baseline and is what AP2 mandate signing
+  requires, so the command points that out when you generate an Ed25519 key
+  alone. Ed25519 uses ext-sodium (bundled with PHP 7.2+) and degrades with a
+  clear message when it is unavailable — it is a `suggest`, not a hard
+  requirement.
+
+- **RFC 7638 JWK thumbprint as the default `kid`.** The spec REQUIRES the
+  thumbprint form for any key used in dual-audience Web Bot Auth signatures,
+  so that `UCP-Agent` and `Signature-Agent` lookups resolve the same key. The
+  1.x `angeo-ucp-YYYY-xxxxxxxx` kid quietly broke that. `--kid` overrides.
+  The implementation is checked against the spec's own published example key.
+
+- **Zero-downtime key rotation.** `angeo:ucp:keys:generate --add` appends to
+  `keys[]` instead of replacing it, so a new key can be published, signing
+  moved over, and only then the old entry removed. Under 1.x every generate
+  replaced the single stored key, which failed any signature still in flight
+  against the old kid. The command also refuses to publish a duplicate kid,
+  since consumers resolve keys by kid.
+
+- **`dev.ucp.shopping.permalink`** (new root capability in 2026-08-25). Hands
+  an agent a real buyable storefront URL instead of an API transaction.
+  Unlike every other toggle, this one needs no endpoint module — a stock
+  Magento cart URL already satisfies it — so it is safe to enable on any
+  store. `config.endpoint` defaults to `{baseUrl}/checkout/cart`.
+
+- **`dev.ucp.shopping.buyer_consent`** (new extension in 2026-08-25).
+  Extends cart and/or checkout; pruned when neither parent is declared, like
+  every other extension. The admin comment is explicit that it should only be
+  enabled once checkout actually records the consent it receives.
+
+- **MCP bindings now declare their OpenRPC `schema`.** 1.4.0 emitted an MCP
+  binding with `endpoint` but no schema, leaving agents no machine-readable
+  description of the MCP surface; the spec's own business-profile example
+  declares one on every transport that defines it.
+
+### Fixed
+
+- **Ed25519 keys were unpublishable.** `Config` required `kid/kty/crv/x/y` on
+  every stored JWK, so an OKP key — which correctly has no `y` — was
+  discarded with a warning. Validation now follows
+  `profile.json#/$defs/jwk_public_key`: `kid` and `kty` are always required,
+  EC additionally needs `crv/x/y`, OKP needs `crv/x`, and the kty/crv/alg
+  vocabularies are treated as OPEN, so an unrecognised key type is published
+  rather than dropped (the spec requires that an unsupported key affect only
+  the signature referencing it, never the whole profile).
+
+- **`alg`/`crv` consistency is now enforced.** The new schema pins ES256 to
+  P-256, ES384 to P-384 and EdDSA to Ed25519; a hand-edited JWK with a
+  mismatched pair failed schema validation with no local warning.
+
+- **Private-material stripping extended** to the `oth` and `k` JWK members,
+  which the 2026-08-25 key schema also forbids. 1.x stripped only
+  `d/p/q/dp/dq/qi`.
+
+- **`spec` URLs are no longer authority-bound.** 1.x rejected any `dev.ucp.*`
+  entity whose `spec` URL was not on `ucp.dev`. The new spec is explicit that
+  documentation is off the machine trust path: a `spec` URL MUST be https but
+  MAY be served from any host. The check now applies to `schema` only, which
+  is where the binding actually belongs.
+
+### CI
+
+- `UCP_SPEC_TAG` bumped to `v2026-08-25`.
+- `dev/schema-validation/validate.py` follows the schema move:
+  `source/discovery/profile_schema.json#/$defs/business_profile` was deleted
+  and replaced by `source/schemas/profile.json#/$defs/business_schema`. Both
+  layouts are probed so the validator still works if the tag is rolled back.
+- Two new fixtures: a permalink-only profile (the realistic shape for a store
+  with no endpoint module) and a multi-parent extension profile exercising
+  the array form of `extends`. The full fixture publishes both an Ed25519 and
+  an ES256 key, mirroring the spec's own example.
+
+### Upgrade notes
+
+1. `composer require angeo/module-ucp:^2.0 && bin/magento setup:upgrade`
+2. Run `bin/magento angeo:ucp:validate` and fix anything it reports.
+3. **If any platform integrates against your current profile**, freeze a copy
+   of the 2026-04-08 profile as a static file and declare it under
+   *Advanced → Supported Versions*:
+   `{"2026-04-08": "https://yourstore.com/ucp/profiles/2026-04-08.json"}`.
+   This module serves only the version it advertises, so the older profile
+   has to be hosted by you.
+4. Purge `/.well-known/ucp` from any CDN or Varnish in front of the store.
+5. Existing ES256 keys keep working unchanged and are simply re-published
+   under `keys[]`. Their kid is left alone — regenerating with a thumbprint
+   kid is only necessary if you intend to use Web Bot Auth.
+
 ## [1.4.0] - 2026-07-04
 
 Extensibility release: multi-transport service bindings and automated
@@ -54,7 +215,9 @@ the services registry is now open for extension without core changes.
   (`array $serviceBindingProviders = []`). Wired automatically via di.xml;
   only code instantiating the class directly (e.g. tests) needs updating.
 - Behavior is unchanged for existing installs: with no MCP endpoint
-  configured, the emitted profile is byte-identical.
+  configured, the emitted profile is byte-identical to 1.3.0.
+
+## [1.3.0] - 2026-07-03
 
 Schema-compliance release. The generated profile is now validated end-to-end
 against the **official JSON Schemas** from the spec repository

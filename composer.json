@@ -1,8 +1,8 @@
 {
     "name": "angeo/module-ucp",
-    "description": "Spec-compliant Universal Commerce Protocol (UCP) profile generator for Magento 2. Generates /.well-known/ucp at protocol version 2026-04-08 with ECDSA P-256 signing keys, declared capabilities, and proper cache headers.",
+    "description": "Spec-compliant Universal Commerce Protocol (UCP) profile generator for Magento 2. Serves /.well-known/ucp at protocol version 2026-08-25 with the canonical keys[] JWK Set (ES256/ES384/Ed25519), authority-bound capability schemas, and correct hosting/CORS headers.",
     "type": "magento2-module",
-    "version": "1.4.0",
+    "version": "2.0.0",
     "license": "MIT",
     "keywords": [
         "magento2",
@@ -11,18 +11,19 @@
         "universal commerce protocol",
         "agentic commerce",
         "ai agents",
-        "google ucp",
+        "web bot auth",
         "well-known",
+        "jwk",
         "aeo",
         "angeo"
     ],
     "require": {
         "php": ">=8.2",
-        "ext-openssl": "*",
         "ext-json": "*",
+        "ext-openssl": "*",
         "magento/framework": ">=103.0.0",
-        "magento/module-config": ">=101.0.0",
         "magento/module-backend": ">=102.0.0",
+        "magento/module-config": ">=101.0.0",
         "magento/module-store": ">=101.0.0"
     },
     "require-dev": {
@@ -53,5 +54,9 @@
         "psr-4": {
             "Angeo\\Ucp\\Test\\": "Test/"
         }
+    },
+    "suggest": {
+        "ext-sodium": "Required only for Ed25519 (EdDSA) signing keys, which the UCP spec recommends for Web Bot Auth interop. ES256 works without it.",
+        "angeo/module-ucp-catalog": "Serves the catalog.search / catalog.lookup / get_product endpoints this profile advertises"
     }
 }

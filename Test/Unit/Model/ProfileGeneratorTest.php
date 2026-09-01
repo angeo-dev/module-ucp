@@ -26,7 +26,7 @@ final class ProfileGeneratorTest extends TestCase
     {
         $profile = $this->generate();
 
-        self::assertSame('2026-04-08', $profile['ucp']['version']);
+        self::assertSame('2026-08-25', $profile['ucp']['version']);
     }
 
     #[Test]
@@ -41,9 +41,9 @@ final class ProfileGeneratorTest extends TestCase
         $rest = $services['dev.ucp.shopping'][0];
         self::assertSame('rest', $rest['transport']);
         self::assertSame(self::ENDPOINT, $rest['endpoint']);
-        self::assertSame('2026-04-08', $rest['version']);
-        self::assertStringStartsWith('https://ucp.dev/2026-04-08/', $rest['spec']);
-        self::assertStringStartsWith('https://ucp.dev/2026-04-08/', $rest['schema']);
+        self::assertSame('2026-08-25', $rest['version']);
+        self::assertStringStartsWith('https://ucp.dev/2026-08-25/', $rest['spec']);
+        self::assertStringStartsWith('https://ucp.dev/2026-08-25/', $rest['schema']);
     }
 
     #[Test]
@@ -92,7 +92,7 @@ final class ProfileGeneratorTest extends TestCase
     #[Test]
     public function catalog_is_split_into_granular_search_and_lookup_capabilities(): void
     {
-        // Per spec 2026-04-08, catalog is NOT a single capability —
+        // Per spec 2026-08-25, catalog is NOT a single capability —
         // it is dev.ucp.shopping.catalog.search + dev.ucp.shopping.catalog.lookup.
         $profile = $this->generate(catalogSearch: true, catalogLookup: true);
         $caps    = $profile['ucp']['capabilities'];
@@ -103,21 +103,21 @@ final class ProfileGeneratorTest extends TestCase
 
         $search = $caps['dev.ucp.shopping.catalog.search'][0];
         self::assertSame(
-            'https://ucp.dev/2026-04-08/specification/catalog/search',
+            'https://ucp.dev/2026-08-25/specification/shopping/catalog/search',
             $search['spec']
         );
         self::assertSame(
-            'https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json',
+            'https://ucp.dev/2026-08-25/schemas/shopping/catalog_search.json',
             $search['schema']
         );
 
         $lookup = $caps['dev.ucp.shopping.catalog.lookup'][0];
         self::assertSame(
-            'https://ucp.dev/2026-04-08/specification/catalog/lookup',
+            'https://ucp.dev/2026-08-25/specification/shopping/catalog/lookup',
             $lookup['spec']
         );
         self::assertSame(
-            'https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json',
+            'https://ucp.dev/2026-08-25/schemas/shopping/catalog_lookup.json',
             $lookup['schema']
         );
     }
@@ -256,7 +256,7 @@ final class ProfileGeneratorTest extends TestCase
         $handlers = [
             'com.example.tokenizer' => [[
                 'id'      => 'merchant_tokenizer',
-                'version' => '2026-04-08',
+                'version' => '2026-08-25',
                 'spec'    => 'https://example.com/specs/tokenizer',
                 'schema'  => 'https://example.com/schemas/tokenizer.json',
             ]],
@@ -267,7 +267,7 @@ final class ProfileGeneratorTest extends TestCase
     }
 
     #[Test]
-    public function profile_includes_signing_keys_when_configured(): void
+    public function profile_publishes_keys_in_the_canonical_top_level_array(): void
     {
         $jwk = [
             'kid' => 'angeo-ucp-2026-abcd1234',
@@ -280,15 +280,20 @@ final class ProfileGeneratorTest extends TestCase
         ];
         $profile = $this->generate(signingKeys: [$jwk]);
 
-        self::assertArrayHasKey('signing_keys', $profile);
-        self::assertSame([$jwk], $profile['signing_keys']);
+        // Spec 2026-08-25: the canonical field is `keys`, not `signing_keys`.
+        // Every UCP verifier reads keys[]; nothing reads signing_keys.
+        self::assertArrayHasKey('keys', $profile);
+        self::assertSame([$jwk], $profile['keys']);
+        self::assertArrayNotHasKey('keys', $profile);
+        self::assertArrayNotHasKey('signing_keys', $profile);
     }
 
     #[Test]
-    public function profile_omits_signing_keys_key_when_none_configured(): void
+    public function profile_omits_keys_array_when_none_configured(): void
     {
         $profile = $this->generate();
 
+        self::assertArrayNotHasKey('keys', $profile);
         self::assertArrayNotHasKey('signing_keys', $profile);
     }
 
@@ -366,7 +371,7 @@ final class ProfileGeneratorTest extends TestCase
         $stub = $this->createStub(Config::class);
         $stub->method('getPaymentHandlers')->willReturn([]);
         $stub->method('getSupportedVersions')->willReturn([]);
-        $stub->method('getPublicSigningKeys')->willReturn([]);
+        $stub->method('getPublicKeys')->willReturn([]);
 
         $badProvider = new class implements \Angeo\Ucp\Api\ServiceBindingProviderInterface {
             public function getBindings(string $protocolVersion): array
@@ -433,7 +438,7 @@ final class ProfileGeneratorTest extends TestCase
         $stub->method('isDiscountDeclared')->willReturn($discount);
         $stub->method('getSupportedVersions')->willReturn($supportedVersions);
         $stub->method('getPaymentHandlers')->willReturn($paymentHandlers);
-        $stub->method('getPublicSigningKeys')->willReturn($signingKeys);
+        $stub->method('getPublicKeys')->willReturn($signingKeys);
 
         // Same provider pool shape as etc/di.xml wires in production.
         $providers = [

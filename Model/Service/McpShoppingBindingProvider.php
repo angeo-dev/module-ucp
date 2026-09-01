@@ -10,6 +10,7 @@ namespace Angeo\Ucp\Model\Service;
 
 use Angeo\Ucp\Api\ServiceBindingProviderInterface;
 use Angeo\Ucp\Model\Config;
+use Angeo\Ucp\Model\Spec;
 
 /**
  * MCP transport binding for the dev.ucp.shopping service.
@@ -24,8 +25,6 @@ use Angeo\Ucp\Model\Config;
  */
 class McpShoppingBindingProvider implements ServiceBindingProviderInterface
 {
-    private const SPEC_BASE = 'https://ucp.dev/2026-04-08';
-
     public function __construct(
         private readonly Config $config
     ) {
@@ -42,9 +41,15 @@ class McpShoppingBindingProvider implements ServiceBindingProviderInterface
             Config::SHOPPING_SERVICE_NAME => [
                 [
                     'version'   => $protocolVersion,
-                    'spec'      => self::SPEC_BASE . '/specification/overview',
+                    'spec'      => Spec::SERVICE_SPEC,
                     'transport' => 'mcp',
                     'endpoint'  => $endpoint,
+                    // 2.0.0: the MCP binding now declares its OpenRPC schema
+                    // too. 1.4.0 omitted it, which left agents with no
+                    // machine-readable description of the MCP surface — the
+                    // spec's own business-profile example declares one on
+                    // every transport that defines it.
+                    'schema'    => Spec::SERVICE_MCP_SCHEMA,
                 ],
             ],
         ];
