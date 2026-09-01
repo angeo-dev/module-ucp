@@ -65,6 +65,7 @@ class Config
     public const XML_PATH_EXT_FULFILLMENT       = 'angeo_ucp/extensions/fulfillment_enabled';
     public const XML_PATH_EXT_DISCOUNT          = 'angeo_ucp/extensions/discount_enabled';
     public const XML_PATH_EXT_BUYER_CONSENT     = 'angeo_ucp/extensions/buyer_consent_enabled';
+    public const XML_PATH_INBOUND_SIGNATURE_MODE = 'angeo_ucp/security/inbound_signature_mode';
 
     // Identity-linking OAuth scopes (comma-separated list in admin).
     public const XML_PATH_IDENTITY_SCOPES       = 'angeo_ucp/capabilities/identity_linking_scopes';
@@ -211,6 +212,42 @@ class Config
     public function isBuyerConsentDeclared(): bool
     {
         return $this->getFlag(self::XML_PATH_EXT_BUYER_CONSENT);
+    }
+
+    /** Verification is off entirely; endpoints accept unsigned requests. */
+    public const SIGNATURE_MODE_DISABLED = 'disabled';
+
+    /** Verify when a signature is present; reject only an invalid one. */
+    public const SIGNATURE_MODE_OPTIONAL = 'optional';
+
+    /** Reject unsigned requests as well as invalid ones. */
+    public const SIGNATURE_MODE_REQUIRED = 'required';
+
+    /**
+     * How UCP endpoint modules treat inbound RFC 9421 signatures.
+     *
+     * `optional` is the migration mode: a counterparty that signs is
+     * authenticated, one that does not is still served. It exists because
+     * flipping straight to `required` cuts off every agent that has not
+     * implemented signing yet, and a merchant has no way to know in advance
+     * which ones those are.
+     *
+     * An unrecognised stored value falls back to `disabled` rather than to
+     * `required` — a typo in configuration should not take a store's UCP
+     * endpoints offline.
+     */
+    public function getInboundSignatureMode(): string
+    {
+        $mode = strtolower(trim((string) $this->scopeConfig->getValue(
+            self::XML_PATH_INBOUND_SIGNATURE_MODE,
+            ScopeInterface::SCOPE_STORE
+        )));
+
+        return in_array($mode, [
+            self::SIGNATURE_MODE_DISABLED,
+            self::SIGNATURE_MODE_OPTIONAL,
+            self::SIGNATURE_MODE_REQUIRED,
+        ], true) ? $mode : self::SIGNATURE_MODE_DISABLED;
     }
 
     /**

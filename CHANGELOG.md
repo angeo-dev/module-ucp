@@ -4,6 +4,105 @@ All notable changes to `angeo/module-ucp` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-08-28
+
+Adds the piece 2.0.0 published keys for but never used: verification of
+inbound RFC 9421 signatures. Also fixes a discovery-cache defect found while
+reviewing an external critique of the module.
+
+### Added
+
+- **`Api\SignatureVerifierInterface`** — verification of inbound RFC 9421
+  signatures, implementing the spec's identity-resolution algorithm. It lives
+  here rather than in an endpoint module because every UCP endpoint needs the
+  same logic and key resolution runs through the profile machinery this module
+  already owns. `angeo/module-ucp-catalog` 2.1.0 consumes it.
+
+  Why this and not response signing first: the spec's MUST runs in the
+  *inbound* direction — a business MUST reject a request whose counterparty
+  profile cannot be fetched or fails validation. Until 2.1.0 the endpoints
+  advertised by this profile answered anyone who sent a POST. Signing our own
+  responses is still to come, and is the weaker obligation of the two.
+
+  What is implemented:
+  - Signature base reconstruction (`Model\Signature\SignatureBase`) including
+    the derived components `@method`, `@authority`, `@path`, `@query`,
+    `@scheme`, `@target-uri`, and RFC 9421 §2.1.2 dictionary-member selection
+    so `signature-agent;key="sig1"` can be covered.
+  - `ecdsa-p256-sha256`, `ecdsa-p384-sha384` and `ed25519`. ECDSA signatures
+    arrive as raw `r||s` and are converted to DER for OpenSSL; the key's
+    `kty`/`crv` must match the nominated `alg`, so a signer cannot downgrade
+    to a weaker algorithm than the profile advertises.
+  - **Covered-component enforcement.** A signature that does not cover the
+    request target, the body digest when a body is present, or a present
+    `ucp-agent` / `signature-agent` / `idempotency-key` header is skipped —
+    an uncovered component is an unsigned component.
+  - **Content-Digest is checked against the body**, not merely required to be
+    covered. Covering a digest header that nobody validates authenticates
+    nothing.
+  - Multiple signatures per request: each is attempted independently and the
+    request is authenticated when at least one verifies, per RFC 9421 §4.3.
+  - For `tag="web-bot-auth"`, `keyid` MUST equal the RFC 7638 thumbprint of
+    the matched JWK — the binding 2.0.0's thumbprint kids exist for.
+  - Keys marked `use: "enc"`, or with `key_ops` lacking `"verify"`, are
+    skipped during resolution (RFC 7517 §4.2/§4.3).
+  - `created` in the future and `expires` in the past are rejected, with a
+    300-second skew allowance.
+
+- **`Model\Signature\ProfileFetcher`** — implements the spec's Fetching
+  rules, which are normative precisely because this class dereferences a URL
+  supplied by the request and is an SSRF primitive otherwise: HTTPS only, no
+  redirect following, **resolved-address** checks against RFC 6890 special-use
+  ranges (including the cloud metadata address `169.254.169.254`) so DNS
+  rebinding does not slip through, a 128 KiB body bound, connect and response
+  timeouts, and a 60-second cache TTL floor. On an unknown `kid` the profile is
+  force-refreshed once — a counterparty that just rotated should not be locked
+  out for a whole TTL — rate-limited to once per origin per TTL floor.
+
+- **Admin setting: `Request Security → Inbound Signature Verification`**, with
+  three modes.
+  - `disabled` (default) — 2.0.x behaviour, everything served unverified.
+  - `optional` — the migration mode: a counterparty that signs is
+    authenticated, one that does not is still served. An **invalid** signature
+    is rejected here too; what `optional` relaxes is only the *absence* of one.
+  - `required` — unsigned requests get 401.
+
+  Default is `disabled` on purpose. No agent signs requests to a store that has
+  never advertised signature support, so defaulting to `required` would 401
+  every existing integration on upgrade. An unrecognised stored value also
+  falls back to `disabled` rather than `required` — a configuration typo should
+  not take a store's UCP endpoints offline.
+
+### Fixed
+
+- **Discovery-cache fragmentation.** The 2.0.0 router normalised trailing
+  slashes before matching, so `/.well-known/ucp` and `/.well-known/ucp/`
+  both served the profile. Two URLs returning identical bytes are two CDN
+  cache entries, halving the hit rate on the single most-fetched document the
+  module serves. 2.1.0 serves the canonical path only and issues a **301** for
+  the trailing-slash form, preserving the query string.
+
+  For the record, the related claim that the module also serves
+  `/.well-known/ucp.json` is not accurate: no such route exists in the module,
+  and no such path exists anywhere in the specification at tag `v2026-08-25`.
+  Only the trailing-slash variant was real.
+
+### Changed
+
+- `ext-curl` is now a hard requirement rather than assumed. Verification
+  cannot resolve a counterparty's keys without it, and failing at install time
+  is better than failing per-request.
+
+### Testing
+
+- `dev/signature-verification/verify_test.php` runs the verifier against a real
+  Ed25519 keypair with no Magento or network dependency. Thirteen cases,
+  including: tampered body, swapped `@path`, a query string appended after
+  signing, a signature omitting `content-digest` from its covered set, a
+  present `idempotency-key` left uncovered, `alg` substitution, a key marked
+  `use: "enc"`, an unknown `kid`, and `Signature-Input` sent without
+  `Signature`.
+
 ## [2.0.0] - 2026-08-28
 
 Adopts UCP spec release **2026-08-25**, published on 25 August 2026 — the

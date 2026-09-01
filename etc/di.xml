@@ -45,4 +45,6 @@
             </argument>
         </arguments>
     </type>
+    <preference for="Angeo\Ucp\Api\SignatureVerifierInterface"
+                type="Angeo\Ucp\Model\Signature\SignatureVerifier"/>
 </config>

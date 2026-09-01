@@ -53,6 +53,34 @@ router dispatches it. The official Magento nginx sample has no
 > first (as `application/octet-stream`, no CORS) and the controller would never
 > run.
 
+## Inbound signature verification (2.1.0)
+
+The profile publishes keys. 2.1.0 adds the half that uses them: verification
+of RFC 9421 signatures on requests *arriving* at your UCP endpoints.
+
+This direction is the one the spec puts a MUST on — a business rejects a
+request whose counterparty profile cannot be fetched or fails validation.
+Before 2.1.0, endpoints advertised by a signed profile answered anyone who
+sent a POST.
+
+**Stores → Configuration → Angeo UCP → Request Security:**
+
+| Mode | Signed & valid | Signed & invalid | Unsigned |
+|---|---|---|---|
+| `disabled` (default) | served | served | served |
+| `optional` | served | **401** | served |
+| `required` | served | **401** | **401** |
+
+Start in `optional`. An invalid signature is refused there too — only a
+*missing* one is tolerated — so you get real enforcement while you find out,
+from the log, which agents actually sign. There is no way to know that in
+advance, which is why `required` is not the default.
+
+Endpoint modules consume this through `Api\SignatureVerifierInterface`;
+`angeo/module-ucp-catalog` 2.1.0 already does.
+
+Not yet implemented: signing our *own* responses. Tracked for a later release.
+
 ## Upgrading from 1.x
 
 1.4.0 is not broken — it publishes a valid `2026-04-08` profile, and the spec

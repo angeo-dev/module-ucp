@@ -81,11 +81,21 @@ class Router implements RouterInterface
                 continue;
             }
 
-            // Drop query string and fragment, normalise slashes.
+            // Drop query string and fragment. Trailing slashes are NOT
+            // normalised away: `/.well-known/ucp/` is a different URL that
+            // would serve identical bytes, so a CDN caches it separately and
+            // the halved hit rate is paid on every agent fetch. 2.1.0 matches
+            // the canonical form only; the variant is redirected instead
+            // (see Controller\WellKnown\Ucp).
             $path = (string) parse_url($raw, PHP_URL_PATH);
-            $path = '/' . trim($path, '/');
 
             if ($path === self::WELL_KNOWN_PATH) {
+                return true;
+            }
+
+            // Recognised so the controller can issue a 301, not so it can
+            // serve a second copy.
+            if (rtrim($path, '/') === self::WELL_KNOWN_PATH) {
                 return true;
             }
         }

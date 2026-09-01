@@ -48,6 +48,9 @@ use Psr\Log\LoggerInterface;
  */
 class Ucp implements HttpGetActionInterface, HttpOptionsActionInterface
 {
+    /** The one URL the profile is served from. */
+    private const CANONICAL_PATH = '/.well-known/ucp';
+
     private const CACHE_MAX_AGE = 300;
 
     /** How long browsers may cache the CORS preflight result (seconds). */
@@ -64,6 +67,15 @@ class Ucp implements HttpGetActionInterface, HttpOptionsActionInterface
 
     public function execute(): ResultInterface
     {
+        // Canonical URL enforcement (2.1.0). The router also recognises
+        // `/.well-known/ucp/`, but serving identical bytes from two URLs
+        // splits every CDN and agent cache entry in half for no benefit.
+        // A 301 keeps the variant reachable while collapsing the cache key.
+        $canonical = $this->canonicalRedirect();
+        if ($canonical !== null) {
+            return $canonical;
+        }
+
         if ($this->request instanceof HttpRequest
             && strtoupper((string) $this->request->getMethod()) === 'OPTIONS'
         ) {
@@ -152,4 +164,42 @@ class Ucp implements HttpGetActionInterface, HttpOptionsActionInterface
 
         return $result;
     }
+
+    /**
+     * A redirect result when the request came in on a non-canonical form of
+     * the discovery path, or null when it is already canonical.
+     *
+     * Only the trailing-slash variant is redirected. Anything else the router
+     * accepted is already the exact path.
+     */
+    private function canonicalRedirect(): ?ResultInterface
+    {
+        if (!$this->request instanceof HttpRequest) {
+            return null;
+        }
+
+        $path = (string) parse_url((string) $this->request->getRequestUri(), PHP_URL_PATH);
+
+        if ($path === '' || $path === self::CANONICAL_PATH) {
+            return null;
+        }
+
+        if (rtrim($path, '/') !== self::CANONICAL_PATH) {
+            return null;
+        }
+
+        $target = self::CANONICAL_PATH;
+        $query  = (string) parse_url((string) $this->request->getRequestUri(), PHP_URL_QUERY);
+        if ($query !== '') {
+            $target .= '?' . $query;
+        }
+
+        /** @var \Magento\Framework\Controller\Result\Redirect $redirect */
+        $redirect = $this->resultFactory->create(ResultFactory::TYPE_REDIRECT);
+        $redirect->setHttpResponseCode(301);
+        $redirect->setUrl($target);
+
+        return $redirect;
+    }
+
 }

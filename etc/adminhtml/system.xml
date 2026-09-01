@@ -266,6 +266,36 @@
                     ]]></comment>
                 </field>
             </group>
-        </section>
+                    <group id="security" translate="label" sortOrder="60" showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>Request Security</label>
+                <comment><![CDATA[
+                    Governs how UCP endpoint modules (e.g.
+                    <code>angeo/module-ucp-catalog</code>) treat RFC 9421
+                    signatures on <em>incoming</em> agent requests. This module
+                    supplies the verifier; the endpoints enforce the policy.
+                ]]></comment>
+                <field id="inbound_signature_mode" translate="label comment" type="select" sortOrder="10"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Inbound Signature Verification</label>
+                    <source_model>Angeo\Ucp\Model\Config\Source\SignatureMode</source_model>
+                    <comment><![CDATA[
+                        <strong>Disabled</strong> (default) keeps 2.0.x behaviour:
+                        every request is served unverified.
+                        <br/><br/>
+                        <strong>Optional</strong> is the migration setting. A
+                        counterparty that signs is authenticated; one that does
+                        not is still served. An <em>invalid</em> signature is
+                        rejected in this mode too — a broken signature is never
+                        acceptable, only a missing one.
+                        <br/><br/>
+                        <strong>Required</strong> rejects unsigned requests with
+                        401. Only switch to this once you know every agent
+                        calling your endpoints signs — there is no way to
+                        discover that in advance, so run in Optional first and
+                        watch the log.
+                    ]]></comment>
+                </field>
+            </group>
+</section>
     </system>
 </config>

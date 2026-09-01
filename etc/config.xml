@@ -38,6 +38,15 @@
                 <supported_versions></supported_versions>
                 <payment_handlers></payment_handlers>
             </advanced>
-        </angeo_ucp>
+            <security>
+                    <!--
+                        Disabled by default. No agent signs requests to a store
+                        that has never advertised signature support, so
+                        defaulting to "required" would reject every existing
+                        integration the moment this module is upgraded.
+                    -->
+                    <inbound_signature_mode>disabled</inbound_signature_mode>
+                </security>
+            </angeo_ucp>
     </default>
 </config>
