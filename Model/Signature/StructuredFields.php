@@ -21,7 +21,7 @@ namespace Angeo\Ucp\Model\Signature;
  * narrow one that REJECTS anything it does not fully understand is safer,
  * because in signature verification an unparsed input must fail closed.
  */
-final class StructuredFields
+class StructuredFields
 {
     /**
      * Parse a dictionary whose members are inner lists with parameters —

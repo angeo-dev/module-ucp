@@ -29,7 +29,7 @@ namespace Angeo\Ucp\Model;
  *  4. Valid iff the entity name equals authority_prefix (exact) OR begins
  *     with authority_prefix followed by a '.' (label-aligned prefix).
  */
-final class AuthorityBinding
+class AuthorityBinding
 {
     /**
      * @return array{0: bool, 1: string} [valid, human-readable reason]

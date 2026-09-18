@@ -28,8 +28,6 @@ class Router implements RouterInterface
 {
     private const WELL_KNOWN_PATH = '/.well-known/ucp';
 
-    private const TARGET_ACTION = 'angeo_ucp/wellknown/ucp';
-
     public function __construct(
         private readonly ActionFactory $actionFactory
     ) {

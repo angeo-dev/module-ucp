@@ -1,16 +1,29 @@
+includes:
+    - vendor/bitexpert/phpstan-magento/extension.neon
+
 parameters:
-    level: 6
+    level: 5
+
     paths:
-        - Api
-        - Console
-        - Controller
-        - Model
+        - .
+
     excludePaths:
-        - Test
-        - vendor
-    ignoreErrors:
-        # Magento framework interfaces are not auto-discoverable without
-        # the full Magento source tree. CI uses continue-on-error for now;
-        # this section is for known noise we want suppressed regardless.
-        - '#Call to an undefined method Magento\\#'
+        analyseAndScan:
+            - vendor
+            - Test
+
+    # Magento core PHPDoc blocks are often inaccurate; do not treat them as facts
     treatPhpDocTypesAsCertain: false
+
+    # Do not fail when an ignore pattern matches nothing
+    reportUnmatchedIgnoredErrors: false
+
+    ignoreErrors:
+        # Magento service contracts are narrower than the concrete classes the
+        # object manager actually returns. Calling Store, Product, Quote and
+        # Request methods through the interface is standard practice in Magento.
+        - '#Call to an undefined method Magento\\Store\\Api\\Data\\StoreInterface::#'
+        - '#Call to an undefined method Magento\\Catalog\\Api\\Data\\ProductInterface::#'
+        - '#Call to an undefined method Magento\\Catalog\\Api\\Data\\CategoryInterface::#'
+        - '#Call to an undefined method Magento\\Framework\\App\\RequestInterface::#'
+        - '#Parameter \#\d+ \$\w+ of method .+ expects Magento\\Catalog\\Model\\(Product|Category), Magento\\Catalog\\Api\\Data\\(ProductInterface|CategoryInterface) given\.#'

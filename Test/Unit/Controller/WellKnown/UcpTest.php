@@ -20,45 +20,8 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 
-/**
- * Test double for the RAW result: records the response code, headers,
- * and body the controller sets, so assertions can inspect them.
- */
-final class RawResultSpy implements ResultInterface
-{
-    public int $httpCode = 0;
-
-    /** @var array<string, string> */
-    public array $headers = [];
-
-    public string $contents = '';
-
-    public function setHttpResponseCode($httpCode)
-    {
-        $this->httpCode = (int) $httpCode;
-        return $this;
-    }
-
-    public function setHeader($name, $value, $replace = false)
-    {
-        $this->headers[(string) $name] = (string) $value;
-        return $this;
-    }
-
-    public function setContents($contents)
-    {
-        $this->contents = (string) $contents;
-        return $this;
-    }
-
-    public function renderResult(ResponseInterface $response)
-    {
-        return $this;
-    }
-}
-
 #[CoversClass(Ucp::class)]
-final class UcpTest extends TestCase
+class UcpTest extends TestCase
 {
     #[Test]
     public function options_request_returns_204_preflight_with_cors_headers(): void

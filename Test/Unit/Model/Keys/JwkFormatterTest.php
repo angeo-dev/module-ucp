@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
 
 #[CoversClass(JwkFormatter::class)]
 #[RequiresPhpExtension('openssl')]
-final class JwkFormatterTest extends TestCase
+class JwkFormatterTest extends TestCase
 {
     private JwkFormatter $formatter;
 

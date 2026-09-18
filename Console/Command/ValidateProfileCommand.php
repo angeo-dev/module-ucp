@@ -191,78 +191,76 @@ class ValidateProfileCommand extends Command
 
         // ── Capabilities ──────────────────────────────────────────────────
         $capabilities = self::registryToArray($profile['ucp']['capabilities'] ?? []);
-        if (true) {
-            $declaredNames = array_keys($capabilities);
+        $declaredNames = array_keys($capabilities);
 
-            foreach ($capabilities as $capName => $entries) {
-                if (!preg_match(Config::REVERSE_DOMAIN_PATTERN, (string) $capName)) {
-                    $errors[] = sprintf(
-                        'Capability key "%s" is not a valid reverse-domain name.',
+        foreach ($capabilities as $capName => $entries) {
+            if (!preg_match(Config::REVERSE_DOMAIN_PATTERN, (string) $capName)) {
+                $errors[] = sprintf(
+                    'Capability key "%s" is not a valid reverse-domain name.',
+                    $capName
+                );
+            }
+            if (!is_array($entries)) {
+                continue;
+            }
+            foreach ($entries as $entry) {
+                // 2026-08-25: business capabilities REQUIRE version AND
+                // schema. `schema` was optional at 2026-04-08; it is now
+                // what the platform fetches and composes during
+                // negotiation, so a capability without one is inert.
+                foreach (['version', 'schema'] as $required) {
+                    if (empty($entry[$required])) {
+                        $errors[] = sprintf(
+                            'Capability "%s" is missing required field "%s" '
+                            . '(capability.json#/$defs/business_schema).',
+                            $capName,
+                            $required
+                        );
+                    }
+                }
+
+                if (empty($entry['spec'])) {
+                    $warnings[] = sprintf(
+                        'Capability "%s" has no "spec" URL. Optional, but it is '
+                        . 'the only human-readable pointer an integrator gets.',
                         $capName
                     );
                 }
-                if (!is_array($entries)) {
-                    continue;
+
+                // Authority binding applies to `schema` only.
+                $schemaUrl = (string) ($entry['schema'] ?? '');
+                if ($schemaUrl !== '') {
+                    [$bound, $reason] = AuthorityBinding::check((string) $capName, $schemaUrl);
+                    if (!$bound) {
+                        $errors[] = 'Capability "' . $capName . '": ' . $reason;
+                    }
                 }
-                foreach ($entries as $entry) {
-                    // 2026-08-25: business capabilities REQUIRE version AND
-                    // schema. `schema` was optional at 2026-04-08; it is now
-                    // what the platform fetches and composes during
-                    // negotiation, so a capability without one is inert.
-                    foreach (['version', 'schema'] as $required) {
-                        if (empty($entry[$required])) {
-                            $errors[] = sprintf(
-                                'Capability "%s" is missing required field "%s" '
-                                . '(capability.json#/$defs/business_schema).',
-                                $capName,
-                                $required
-                            );
-                        }
-                    }
 
-                    if (empty($entry['spec'])) {
-                        $warnings[] = sprintf(
-                            'Capability "%s" has no "spec" URL. Optional, but it is '
-                            . 'the only human-readable pointer an integrator gets.',
-                            $capName
-                        );
-                    }
+                // `spec` is documentation, off the machine trust path:
+                // it MUST be https but MAY live on any host.
+                $specUrl = (string) ($entry['spec'] ?? '');
+                if ($specUrl !== '' && !str_starts_with(strtolower($specUrl), 'https://')) {
+                    $errors[] = sprintf(
+                        'Capability "%s" spec URL must be https. Got: %s',
+                        $capName,
+                        $specUrl
+                    );
+                }
 
-                    // Authority binding applies to `schema` only.
-                    $schemaUrl = (string) ($entry['schema'] ?? '');
-                    if ($schemaUrl !== '') {
-                        [$bound, $reason] = AuthorityBinding::check((string) $capName, $schemaUrl);
-                        if (!$bound) {
-                            $errors[] = 'Capability "' . $capName . '": ' . $reason;
-                        }
-                    }
-
-                    // `spec` is documentation, off the machine trust path:
-                    // it MUST be https but MAY live on any host.
-                    $specUrl = (string) ($entry['spec'] ?? '');
-                    if ($specUrl !== '' && !str_starts_with(strtolower($specUrl), 'https://')) {
+                // Orphaned-extension check.
+                if (isset($entry['extends'])) {
+                    $parents = is_array($entry['extends'])
+                        ? $entry['extends']
+                        : [$entry['extends']];
+                    $hasParent = array_intersect($parents, $declaredNames) !== [];
+                    if (!$hasParent) {
                         $errors[] = sprintf(
-                            'Capability "%s" spec URL must be https. Got: %s',
+                            'Extension "%s" has no declared parent capability '
+                            . '(extends: %s). Orphaned extensions are pruned '
+                            . 'during negotiation and must not be advertised.',
                             $capName,
-                            $specUrl
+                            implode(', ', $parents)
                         );
-                    }
-
-                    // Orphaned-extension check.
-                    if (isset($entry['extends'])) {
-                        $parents = is_array($entry['extends'])
-                            ? $entry['extends']
-                            : [$entry['extends']];
-                        $hasParent = array_intersect($parents, $declaredNames) !== [];
-                        if (!$hasParent) {
-                            $errors[] = sprintf(
-                                'Extension "%s" has no declared parent capability '
-                                . '(extends: %s). Orphaned extensions are pruned '
-                                . 'during negotiation and must not be advertised.',
-                                $capName,
-                                implode(', ', $parents)
-                            );
-                        }
                     }
                 }
             }
@@ -465,7 +463,7 @@ class ValidateProfileCommand extends Command
             '  ✓ Protocol %s | %d service binding(s) | %d capability(ies) | %d published key(s)',
             Config::PROTOCOL_VERSION,
             count($services),
-            is_array($capabilities) ? count($capabilities) : 0,
+            count($capabilities),
             count($keys)
         ));
 

@@ -16,7 +16,7 @@ namespace Angeo\Ucp\Model\Signature;
  * configured mode; a request carrying a signature that does not verify is
  * never acceptable in any mode.
  */
-final class VerificationResult
+class VerificationResult
 {
     public const UNSIGNED = 'unsigned';
     public const VERIFIED = 'verified';

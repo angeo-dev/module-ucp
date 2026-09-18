@@ -4,6 +4,58 @@ All notable changes to `angeo/module-ucp` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-09-15
+
+A code-quality release. The published profile does not change.
+
+### Added
+
+- GitHub Actions CI (`.github/workflows/ci.yml`) on PHP 8.1–8.5: composer
+  validate, PHP lint, Magento2 coding standard,
+  PHPUnit. PHPStan runs once, in its own job on PHP 8.2, as in
+  the Mage-OS modules. Magento
+  packages come from the Mage-OS mirror.
+- `phpstan.neon` (level 5, `bitexpert/phpstan-magento`). The extension
+  generates Magento factory classes during analysis, so no stub files are
+  needed.
+- Dev dependencies: `magento/magento-coding-standard`, `phpstan/phpstan` ^2,
+  `bitexpert/phpstan-magento`.
+
+### Changed
+
+- **`composer.json`:** PHP 8.1–8.5 (was `>=8.2`). The code uses no PHP 8.2+
+  syntax or functions; CI now runs on 8.1 too. Magento
+  dependencies have bounded ranges (Magento 2.4.6 – 2.4.x). Dev dependencies
+  moved to PHPUnit 10.5 and PHPStan 2.
+- `phpstan.neon` replaced with the suite-wide config (level 5). The old one
+  ignored every undefined Magento method.
+- `AuthorityBinding`, `Spec`, `StructuredFields` and `VerificationResult` are
+  no longer `final` (Magento coding standard).
+- `ProfileFetcher`: DNS lookup no longer uses the `@` operator; a failed
+  lookup still yields no addresses.
+- `ProfileFetcher` no longer calls `curl_close()` (deprecated in PHP 8.5).
+- `angeo:ucp:validate`: removed an `if (true)` wrapper and a dead
+  `is_array()` check. Same output.
+- `Controller\Router`: removed the unused `TARGET_ACTION` constant.
+- Tests: `RawResultSpy` moved to its own file; test classes are no longer
+  `final`. `phpunit.xml` no longer lists the non-existent `Plugin` directory.
+
+### Build
+
+- Unit tests: Store mocks use `Magento\Store\Model\Store` (for
+  `getBaseUrl()`); two expectations updated to the current JWK warning text
+  and the `keys` array, one of which contradicted itself.
+
+### Documentation
+
+- README: one badge row across the suite — CI, Packagist version and
+  downloads, PHP 8.1 – 8.5, supported Magento range, Mage-OS Extension
+  Directory, license.
+
+### Quality
+
+- Magento2 coding standard: 0 errors. PHPStan level 5: no errors.
+
 ## [2.1.0] - 2026-08-28
 
 Adds the piece 2.0.0 published keys for but never used: verification of

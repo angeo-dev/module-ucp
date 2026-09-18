@@ -11,6 +11,7 @@ namespace Angeo\Ucp\Test\Unit\Model;
 use Angeo\Ucp\Model\Config;
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Store\Api\Data\StoreInterface;
+use Magento\Store\Model\Store;
 use Magento\Store\Model\ScopeInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -20,7 +21,7 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 #[CoversClass(Config::class)]
-final class ConfigTest extends TestCase
+class ConfigTest extends TestCase
 {
     // ── getPublicKeys ──────────────────────────────────────────────────
 
@@ -105,7 +106,7 @@ final class ConfigTest extends TestCase
         $logger = $this->createMock(LoggerInterface::class);
         $logger->expects(self::once())
             ->method('warning')
-            ->with(self::stringContains('missing required fields'));
+            ->with(self::stringContains('missing required member "y"'));
 
         $config = $this->buildConfig(jwkJson: json_encode($incomplete), logger: $logger);
 
@@ -117,7 +118,7 @@ final class ConfigTest extends TestCase
     #[Test]
     public function getRestEndpoint_uses_store_base_url_when_blank(): void
     {
-        $store = $this->createStub(StoreInterface::class);
+        $store = $this->createStub(Store::class);
         $store->method('getBaseUrl')->willReturn('https://shop.example.com/');
 
         $storeManager = $this->createStub(StoreManagerInterface::class);
@@ -179,7 +180,7 @@ final class ConfigTest extends TestCase
     #[Test]
     public function getRestEndpoint_logs_warning_for_non_https_derived_url(): void
     {
-        $store = $this->createStub(StoreInterface::class);
+        $store = $this->createStub(Store::class);
         $store->method('getBaseUrl')->willReturn('http://insecure.example.com/');
 
         $storeManager = $this->createStub(StoreManagerInterface::class);

@@ -17,7 +17,7 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(ProfileGenerator::class)]
-final class ProfileGeneratorTest extends TestCase
+class ProfileGeneratorTest extends TestCase
 {
     private const ENDPOINT = 'https://shop.example.com/rest/V1/ucp';
 
@@ -284,7 +284,6 @@ final class ProfileGeneratorTest extends TestCase
         // Every UCP verifier reads keys[]; nothing reads signing_keys.
         self::assertArrayHasKey('keys', $profile);
         self::assertSame([$jwk], $profile['keys']);
-        self::assertArrayNotHasKey('keys', $profile);
         self::assertArrayNotHasKey('signing_keys', $profile);
     }
 

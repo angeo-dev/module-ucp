@@ -18,7 +18,6 @@
             <directory>Console</directory>
             <directory>Controller</directory>
             <directory>Model</directory>
-            <directory>Plugin</directory>
         </include>
         <exclude>
             <directory>Test</directory>

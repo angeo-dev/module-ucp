@@ -177,7 +177,13 @@ class ProfileFetcher
             $addresses[] = $host;
         } else {
             foreach (['A' => DNS_A, 'AAAA' => DNS_AAAA] as $type => $flag) {
-                $records = @dns_get_record($host, $flag) ?: [];
+                // Magento's error handler turns the DNS warning into an
+                // exception; an unresolvable host simply yields no records.
+                try {
+                    $records = dns_get_record($host, $flag) ?: [];
+                } catch (\Throwable $e) {
+                    $records = [];
+                }
                 foreach ($records as $record) {
                     $addresses[] = $record[$type === 'A' ? 'ip' : 'ipv6'] ?? '';
                 }
@@ -248,7 +254,9 @@ class ProfileFetcher
         $body   = curl_exec($handle);
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
         $error  = curl_error($handle);
-        curl_close($handle);
+        // No curl_close(): it has no effect since PHP 8.0 and is deprecated
+        // in 8.5. The handle is freed when it goes out of scope.
+        unset($handle);
 
         if ($body === false || $status !== 200) {
             $this->logger->info(sprintf(

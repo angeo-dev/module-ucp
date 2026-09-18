@@ -1,12 +1,21 @@
 # Angeo UCP — `/.well-known/ucp` for Magento 2
 
+[![CI](https://github.com/angeo-dev/module-ucp/actions/workflows/ci.yml/badge.svg)](https://github.com/angeo-dev/module-ucp/actions/workflows/ci.yml)
+[![Packagist Version](https://img.shields.io/packagist/v/angeo/module-ucp)](https://packagist.org/packages/angeo/module-ucp)
+[![Downloads](https://img.shields.io/packagist/dt/angeo/module-ucp)](https://packagist.org/packages/angeo/module-ucp)
+[![PHP](https://img.shields.io/badge/PHP-8.1%20%E2%80%93%208.5-777bb4)](composer.json)
+[![Magento](https://img.shields.io/badge/Magento-2.4.6%20%E2%80%93%202.4.9-f26322)](composer.json)
+[![Mage-OS Directory](https://img.shields.io/badge/Mage--OS-Extension%20Directory-2d7d9a)](https://directory.mage-os.org/packages/angeo/module-ucp/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![UCP spec](https://img.shields.io/badge/UCP%20spec-2026--08--25-blue)](https://ucp.dev)
+
 Publishes a [Universal Commerce Protocol](https://ucp.dev) business profile at
 `/.well-known/ucp` so AI shopping agents (Google/Gemini, ChatGPT, etc.) can
 discover your store's commerce capabilities.
 
-- Profile generated per UCP spec **2026-08-25** (current release) and
-  validated in CI against the **official JSON Schemas** from the spec
-  repository (`schemas/profile.json#business_schema`)
+- Profile generated per UCP spec **2026-08-25** (current release), following
+  the **official JSON Schemas** from the spec repository
+  (`schemas/profile.json#business_schema`)
 - **Authority binding enforced locally.** 2026-08-25 makes it a MUST that a
   platform reject any entity whose `schema` host does not match its namespace
   — and it does so *silently*. `angeo:ucp:validate` runs the spec's own

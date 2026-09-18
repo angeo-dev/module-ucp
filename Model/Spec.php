@@ -25,7 +25,7 @@ namespace Angeo\Ucp\Model;
  *
  * @see https://ucp.dev/2026-08-25/specification/overview/
  */
-final class Spec
+class Spec
 {
     /** Documentation root for the advertised protocol version. */
     public const BASE = 'https://ucp.dev/' . Config::PROTOCOL_VERSION;
