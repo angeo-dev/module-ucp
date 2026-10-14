@@ -60,7 +60,8 @@ class ValidateProfileCommand extends Command
     private const NAME = 'angeo:ucp:validate';
 
     public function __construct(
-        private readonly ProfileGeneratorInterface $profileGenerator
+        private readonly ProfileGeneratorInterface $profileGenerator,
+        private readonly ?Config $config = null
     ) {
         parent::__construct();
     }
@@ -109,6 +110,16 @@ class ValidateProfileCommand extends Command
                     $requiredKey
                 );
             }
+        }
+
+        // ── Toggles with no implementation (2.2.0) ───────────────────────
+        foreach ($this->config?->getUnimplementedToggles() ?? [] as $capability) {
+            $warnings[] = sprintf(
+                '%s is switched on in admin, but no installed module serves it, so the '
+                . 'profile leaves it out. Install the module that implements it '
+                . '(checkout: angeo/module-ucp-checkout) or switch the toggle off.',
+                $capability
+            );
         }
 
         // ── Service bindings ──────────────────────────────────────────────

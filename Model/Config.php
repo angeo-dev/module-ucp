@@ -70,6 +70,9 @@ class Config
     // Identity-linking OAuth scopes (comma-separated list in admin).
     public const XML_PATH_IDENTITY_SCOPES       = 'angeo_ucp/capabilities/identity_linking_scopes';
 
+    /** Path the Angeo UCP REST modules serve, relative to the store base URL. */
+    public const DEFAULT_REST_PATH = '/ucp/v1';
+
     public const XML_PATH_REST_ENDPOINT         = 'angeo_ucp/transport/rest_endpoint';
     public const XML_PATH_MCP_ENDPOINT          = 'angeo_ucp/transport/mcp_endpoint';
     public const XML_PATH_SIGNING_KEY_JWK       = 'angeo_ucp/keys/signing_key_jwk';
@@ -102,11 +105,73 @@ class Config
     /** Fields that must never appear in a public JWK. */
     private const PRIVATE_JWK_FIELDS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'];
 
+    /**
+     * Capabilities that need server-side endpoints this module does not ship.
+     * They are advertised only when an installed module registers an
+     * implementation (see $implementations), whatever the admin toggle says.
+     * Catalog and permalink are not gated: Angeo_UcpCatalog and a plain
+     * storefront already serve them.
+     */
+    public const GATED_CAPABILITIES = [
+        'dev.ucp.shopping.cart',
+        'dev.ucp.shopping.checkout',
+        'dev.ucp.shopping.order',
+        'dev.ucp.shopping.fulfillment',
+        'dev.ucp.shopping.discount',
+        'dev.ucp.shopping.buyer_consent',
+    ];
+
+    /**
+     * @param array<string, bool|string|int> $implementations capability name =>
+     *        true, filled through di.xml by the module that actually serves the
+     *        capability (for example angeo/module-ucp-checkout registers
+     *        dev.ucp.shopping.checkout). Added in 2.2.0.
+     */
     public function __construct(
         private readonly ScopeConfigInterface  $scopeConfig,
         private readonly StoreManagerInterface $storeManager,
-        private readonly LoggerInterface       $logger
+        private readonly LoggerInterface       $logger,
+        private readonly array                 $implementations = []
     ) {
+    }
+
+    /**
+     * Whether an installed module serves this capability.
+     *
+     * Ungated capabilities always count as implemented.
+     */
+    public function isImplemented(string $capability): bool
+    {
+        if (!in_array($capability, self::GATED_CAPABILITIES, true)) {
+            return true;
+        }
+        return (bool) ($this->implementations[$capability] ?? false);
+    }
+
+    /**
+     * Gated capabilities the admin switched on but no module serves. Used by
+     * angeo:ucp:validate to explain why a toggle has no effect.
+     *
+     * @return array<int, string>
+     */
+    public function getUnimplementedToggles(): array
+    {
+        $toggles = [
+            'dev.ucp.shopping.cart'          => self::XML_PATH_CAP_CART,
+            'dev.ucp.shopping.checkout'      => self::XML_PATH_CAP_CHECKOUT,
+            'dev.ucp.shopping.order'         => self::XML_PATH_CAP_ORDER,
+            'dev.ucp.shopping.fulfillment'   => self::XML_PATH_EXT_FULFILLMENT,
+            'dev.ucp.shopping.discount'      => self::XML_PATH_EXT_DISCOUNT,
+            'dev.ucp.shopping.buyer_consent' => self::XML_PATH_EXT_BUYER_CONSENT,
+        ];
+
+        $missing = [];
+        foreach ($toggles as $capability => $path) {
+            if ($this->getFlag($path) && !$this->isImplemented($capability)) {
+                $missing[] = $capability;
+            }
+        }
+        return $missing;
     }
 
     public function isEnabled(): bool
@@ -130,17 +195,20 @@ class Config
 
     public function isCartDeclared(): bool
     {
-        return $this->getFlag(self::XML_PATH_CAP_CART);
+        return $this->getFlag(self::XML_PATH_CAP_CART)
+            && $this->isImplemented('dev.ucp.shopping.cart');
     }
 
     public function isCheckoutDeclared(): bool
     {
-        return $this->getFlag(self::XML_PATH_CAP_CHECKOUT);
+        return $this->getFlag(self::XML_PATH_CAP_CHECKOUT)
+            && $this->isImplemented('dev.ucp.shopping.checkout');
     }
 
     public function isOrderDeclared(): bool
     {
-        return $this->getFlag(self::XML_PATH_CAP_ORDER);
+        return $this->getFlag(self::XML_PATH_CAP_ORDER)
+            && $this->isImplemented('dev.ucp.shopping.order');
     }
 
     public function isIdentityLinkingDeclared(): bool
@@ -197,12 +265,14 @@ class Config
 
     public function isFulfillmentDeclared(): bool
     {
-        return $this->getFlag(self::XML_PATH_EXT_FULFILLMENT);
+        return $this->getFlag(self::XML_PATH_EXT_FULFILLMENT)
+            && $this->isImplemented('dev.ucp.shopping.fulfillment');
     }
 
     public function isDiscountDeclared(): bool
     {
-        return $this->getFlag(self::XML_PATH_EXT_DISCOUNT);
+        return $this->getFlag(self::XML_PATH_EXT_DISCOUNT)
+            && $this->isImplemented('dev.ucp.shopping.discount');
     }
 
     /**
@@ -211,7 +281,8 @@ class Config
      */
     public function isBuyerConsentDeclared(): bool
     {
-        return $this->getFlag(self::XML_PATH_EXT_BUYER_CONSENT);
+        return $this->getFlag(self::XML_PATH_EXT_BUYER_CONSENT)
+            && $this->isImplemented('dev.ucp.shopping.buyer_consent');
     }
 
     /** Verification is off entirely; endpoints accept unsigned requests. */
@@ -276,7 +347,7 @@ class Config
 
     /**
      * Returns the REST endpoint URL for the dev.ucp.shopping service.
-     * Defaults to {baseUrl}/rest/V1/ucp.
+     * Defaults to {baseUrl}/ucp/v1 (2.2.0; was {baseUrl}/rest/V1/ucp).
      *
      * Per spec: endpoint MUST be a valid HTTPS URL and SHOULD NOT have a
      * trailing slash. Non-HTTPS endpoints are logged as warnings.
@@ -304,7 +375,11 @@ class Config
             return '';
         }
 
-        $endpoint = rtrim($baseUrl, '/') . '/rest/V1/ucp';
+        // 2.2.0: was {baseUrl}/rest/V1/ucp, a path nothing serves — Magento's
+        // Web API has no such route, and Angeo_UcpCatalog and
+        // Angeo_UcpCheckout both answer under /ucp/v1. An agent that followed
+        // the default profile got 404 on every call.
+        $endpoint = rtrim($baseUrl, '/') . self::DEFAULT_REST_PATH;
         $this->warnIfNotHttps($endpoint, 'derived REST endpoint');
         return $endpoint;
     }

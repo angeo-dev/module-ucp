@@ -4,6 +4,34 @@ All notable changes to `angeo/module-ucp` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-10-14
+
+### Fixed
+
+- **Default REST endpoint pointed at nothing.** With *REST Endpoint URL*
+  empty, the profile advertised `{baseUrl}/rest/V1/ucp`. Magento's Web API
+  has no such route and the Angeo REST modules answer under `/ucp/v1`, so an
+  agent that followed the profile got 404 on every call. The default is now
+  `{baseUrl}/ucp/v1` (`Config::DEFAULT_REST_PATH`). A configured URL is used
+  as before.
+
+### Changed
+
+- **Capabilities that need endpoints are advertised only when served.**
+  Cart, checkout, order and the fulfillment, discount and buyer-consent
+  extensions now need both the admin toggle **and** a module that registers
+  an implementation (`implementations` argument of `Config`, set in that
+  module's `di.xml`). Before, switching on *Checkout* advertised a capability
+  no module served. Catalog and permalink are not gated.
+  `angeo/module-ucp-checkout` registers checkout and discount.
+- `angeo:ucp:validate` warns about toggles that are on but have no
+  implementation.
+
+### Added
+
+- `Config::isImplemented()`, `Config::getUnimplementedToggles()`,
+  `Config::GATED_CAPABILITIES`, `Config::DEFAULT_REST_PATH`.
+
 ## [2.1.1] - 2026-09-15
 
 A code-quality release. The published profile does not change.

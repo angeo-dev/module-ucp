@@ -126,7 +126,7 @@ class ConfigTest extends TestCase
 
         $config = $this->buildConfig(endpoint: '', storeManager: $storeManager);
 
-        self::assertSame('https://shop.example.com/rest/V1/ucp', $config->getRestEndpoint());
+        self::assertSame('https://shop.example.com/ucp/v1', $config->getRestEndpoint());
     }
 
     #[Test]

@@ -174,10 +174,24 @@ order, identity linking, **permalink**, plus the fulfillment, discount and
 **buyer consent** extensions, payment handlers, and supported protocol
 versions.
 
-> Declaring a capability advertises it; it does not implement it. Enable a
-> toggle only when the matching endpoint is live, or agents will send requests
-> that fail. **Permalink is the exception** — it is satisfied by a stock
-> Magento cart URL, so it is safe to turn on anywhere.
+> Since 2.2.0, a toggle alone does not advertise cart, checkout, order,
+> fulfillment, discount or buyer consent. They appear in the profile only when
+> an installed module serves them:
+>
+> | Capability | Served by |
+> |---|---|
+> | `dev.ucp.shopping.catalog.search` / `.lookup` | [`angeo/module-ucp-catalog`](https://github.com/angeo-dev/module-ucp-catalog) (not gated) |
+> | `dev.ucp.shopping.checkout` + `dev.ucp.shopping.discount` | [`angeo/module-ucp-checkout`](https://github.com/angeo-dev/module-ucp-checkout) |
+> | `dev.ucp.shopping.permalink` | a stock Magento cart URL (not gated) |
+> | cart, order, fulfillment, buyer consent | not available yet |
+>
+> `bin/magento angeo:ucp:validate` lists toggles that are on but have no
+> effect. A module registers what it serves through the `implementations`
+> argument of `Angeo\Ucp\Model\Config` in its `di.xml`.
+
+**REST endpoint.** Leave *Transport → REST Endpoint URL* empty to advertise
+`{baseUrl}/ucp/v1`, where the catalog and checkout modules answer. Before
+2.2.0 the default was `{baseUrl}/rest/V1/ucp`, which nothing served.
 
 ## Security
 
