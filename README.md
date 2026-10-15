@@ -181,9 +181,10 @@ versions.
 > | Capability | Served by |
 > |---|---|
 > | `dev.ucp.shopping.catalog.search` / `.lookup` | [`angeo/module-ucp-catalog`](https://github.com/angeo-dev/module-ucp-catalog) (not gated) |
-> | `dev.ucp.shopping.checkout` + `dev.ucp.shopping.discount` | [`angeo/module-ucp-checkout`](https://github.com/angeo-dev/module-ucp-checkout) |
+> | `dev.ucp.shopping.checkout` + `.discount` + `.fulfillment` | [`angeo/module-ucp-checkout`](https://github.com/angeo-dev/module-ucp-checkout) 1.0+ (MCP tools: [`angeo/module-ucp-checkout-mcp`](https://github.com/angeo-dev/module-ucp-checkout-mcp)) |
+> | `dev.ucp.shopping.order` (Get Order + webhooks) | [`angeo/module-ucp-checkout`](https://github.com/angeo-dev/module-ucp-checkout) 1.1+ |
 > | `dev.ucp.shopping.permalink` | a stock Magento cart URL (not gated) |
-> | cart, order, fulfillment, buyer consent | not available yet |
+> | cart, buyer consent | not available yet |
 >
 > `bin/magento angeo:ucp:validate` lists toggles that are on but have no
 > effect. A module registers what it serves through the `implementations`

@@ -4,6 +4,16 @@ All notable changes to `angeo/module-ucp` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-10-14
+
+Documentation only. The profile does not change.
+
+### Changed
+
+- README: which module serves which capability — fulfillment
+  (`angeo/module-ucp-checkout` 1.0+), order with webhooks (1.1+) and the MCP
+  checkout tools (`angeo/module-ucp-checkout-mcp`).
+
 ## [2.2.0] - 2026-10-14
 
 ### Fixed
