@@ -124,6 +124,14 @@ class SignatureBase
     }
 
     /**
+     * The request's `@authority` value, as the signature base uses it.
+     */
+    public function requestAuthority(HttpRequest $request): string
+    {
+        return $this->authority($request);
+    }
+
+    /**
      * Host in lowercase, with the port omitted when it is the scheme default.
      */
     private function authority(HttpRequest $request): string

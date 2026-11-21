@@ -1,6 +1,7 @@
 # Angeo UCP — `/.well-known/ucp` for Magento 2
 
 [![CI](https://github.com/angeo-dev/module-ucp/actions/workflows/ci.yml/badge.svg)](https://github.com/angeo-dev/module-ucp/actions/workflows/ci.yml)
+[![UCP official checks](https://img.shields.io/github/actions/workflow/status/angeo-dev/module-ucp/ucp-official.yml?branch=main&label=UCP%20official%20checks)](https://github.com/angeo-dev/module-ucp/actions/workflows/ucp-official.yml)
 [![Packagist Version](https://img.shields.io/packagist/v/angeo/module-ucp)](https://packagist.org/packages/angeo/module-ucp)
 [![Downloads](https://img.shields.io/packagist/dt/angeo/module-ucp)](https://packagist.org/packages/angeo/module-ucp)
 [![PHP](https://img.shields.io/badge/PHP-8.1%20%E2%80%93%208.5-777bb4)](composer.json)
@@ -62,33 +63,77 @@ router dispatches it. The official Magento nginx sample has no
 > first (as `application/octet-stream`, no CORS) and the controller would never
 > run.
 
-## Inbound signature verification (2.1.0)
+## Inbound signature verification
 
-The profile publishes keys. 2.1.0 adds the half that uses them: verification
-of RFC 9421 signatures on requests *arriving* at your UCP endpoints.
+The profile publishes keys. The verifier uses them: RFC 9421 signatures on
+requests *arriving* at your UCP endpoints, by the spec's identity-resolution
+algorithm.
 
 This direction is the one the spec puts a MUST on — a business rejects a
 request whose counterparty profile cannot be fetched or fails validation.
-Before 2.1.0, endpoints advertised by a signed profile answered anyone who
-sent a POST.
 
 **Stores → Configuration → Angeo UCP → Request Security:**
 
 | Mode | Signed & valid | Signed & invalid | Unsigned |
 |---|---|---|---|
 | `disabled` (default) | served | served | served |
-| `optional` | served | **401** | served |
-| `required` | served | **401** | **401** |
+| `optional` | served | **401/400** | served |
+| `required` | served | **401/400** | **401** |
 
 Start in `optional`. An invalid signature is refused there too — only a
 *missing* one is tolerated — so you get real enforcement while you find out,
-from the log, which agents actually sign. There is no way to know that in
-advance, which is why `required` is not the default.
+from the log, which agents actually sign.
+
+What the verifier expects (UCP 2026-08-25):
+
+- `UCP-Agent: profile="https://…"` — the key comes from that profile's
+  `keys[]`. Without `UCP-Agent`, a `Signature-Agent` member keyed by the
+  signature label with `type=jwks_uri`.
+- No `alg` parameter is needed: the algorithm comes from the key
+  (ES256, ES384, Ed25519). If `alg` is sent, it must match the key.
+- Covered: `@method`, `@authority`, `@path`, `@query` when there is a query,
+  `content-digest` and `content-type` when there is a body, and `ucp-agent`,
+  `signature-agent`, `idempotency-key` when present.
+- `tag="web-bot-auth"`: `created` and `expires` required, window ≤ 24 h,
+  `keyid` = RFC 7638 thumbprint.
+- `@authority` must be one of your store hosts (*Check Signed Host*, on by
+  default).
+
+Failures answer with the spec's codes: `signature_missing`,
+`signature_invalid`, `key_not_found` (401), `digest_mismatch`,
+`algorithm_unsupported` (400). The log says which part failed; the response
+does not.
+
+> **2.2.2 fixes verification for real agents.** Up to 2.2.1 the verifier read
+> the whole `UCP-Agent` header as a URL and required `alg`, so every
+> spec-conformant signature failed. If you switched to `optional` or
+> `required` before, upgrade before you look at the log again.
 
 Endpoint modules consume this through `Api\SignatureVerifierInterface`;
-`angeo/module-ucp-catalog` 2.1.0 already does.
+`angeo/module-ucp-catalog` and `angeo/module-ucp-checkout` do.
 
-Not yet implemented: signing our *own* responses. Tracked for a later release.
+Not yet implemented: signing our *own* responses (RECOMMENDED for checkout
+completion). Webhooks are signed by `angeo/module-ucp-checkout`.
+
+## Official UCP checks
+
+Every push runs the UCP project's own tools
+(`.github/workflows/ucp-official.yml`):
+
+1. Profiles built by the real `ProfileGenerator` (`Test/Conformance`) are
+   validated with the official [`ucp-schema`](https://github.com/Universal-Commerce-Protocol/ucp-schema)
+   CLI against the `v2026-08-25` JSON Schemas.
+2. The official [conformance suite](https://github.com/Universal-Commerce-Protocol/conformance)
+   runs its core tier against them (discovery profile, every spec and
+   schema URL, envelope headers).
+3. Weekly, a spec watch opens an issue when UCP publishes a newer release.
+
+Run the profile part locally:
+
+```bash
+UCP_FIXTURE_DIR=build/ucp vendor/bin/phpunit --testsuite conformance
+UCP_PROFILE=build/ucp/checkout.json php -S 127.0.0.1:8182 Test/Conformance/server.php
+```
 
 ## Upgrading from 1.x
 
@@ -198,6 +243,12 @@ versions.
 
 - The profile is **public and unauthenticated** by design (per the UCP spec).
   Never put secrets, internal URLs, or admin contacts in it.
+- Agent profiles are fetched from URLs that requests supply, so every fetch
+  goes through `Model\Network\PublicAddressGuard`: https, port 443, every
+  resolved address global (no loopback, private, link-local, CGNAT or
+  IPv4-in-IPv6 tricks), connection pinned to the checked address, no
+  redirects, 128 KiB and 5 s limits. Extra ports can be allowed in di.xml
+  (`allowedPorts`).
 - Only **public** keys are published. The private key never leaves the server;
   `ProfileGenerator` reads public keys only (`Config::getPublicKeys()`), and
   any private JWK member (`d`, `p`, `q`, `dp`, `dq`, `qi`, `oth`, `k`) found in

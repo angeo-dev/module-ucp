@@ -16,6 +16,11 @@ namespace Angeo\Ucp\Model\Signature;
  *   ecdsa-p384-sha384  EC / P-384 / ES384
  *   ed25519            OKP / Ed25519 / EdDSA
  *
+ * The algorithm is DERIVED FROM THE KEY (kty/crv). The UCP spec says `alg`
+ * is not included in Signature-Input; when a signer sends it anyway it must
+ * name the same algorithm as the key (2.2.2 — before, a missing `alg` made
+ * every spec-conformant signature fail).
+ *
  * Two details that silently break naive implementations:
  *
  *  - RFC 9421 ECDSA signatures are the RAW r||s concatenation (as in JWS),
@@ -38,31 +43,81 @@ class JwkVerifier
             '302a300506032b6570032100'],
     ];
 
+    /** Accepted spellings of each algorithm: RFC 9421 names and JWA names. */
+    private const ALIASES = [
+        'ecdsa-p256-sha256' => 'ecdsa-p256-sha256',
+        'es256'             => 'ecdsa-p256-sha256',
+        'ecdsa-p384-sha384' => 'ecdsa-p384-sha384',
+        'es384'             => 'ecdsa-p384-sha384',
+        'ed25519'           => 'ed25519',
+        'eddsa'             => 'ed25519',
+    ];
+
+    /**
+     * RFC 9421 algorithm the key implies, or null for a key type this
+     * verifier does not support.
+     *
+     * @param array<string, mixed> $jwk
+     */
+    public function algorithmFor(array $jwk): ?string
+    {
+        foreach (self::ALGORITHMS as $alg => [$kty, $crv]) {
+            if (($jwk['kty'] ?? null) === $kty && ($jwk['crv'] ?? null) === $crv) {
+                return $alg;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Canonical RFC 9421 name for an `alg` parameter, or null if unknown.
+     */
+    public function normalizeAlgorithm(string $alg): ?string
+    {
+        return self::ALIASES[strtolower(trim($alg))] ?? null;
+    }
+
+    /**
+     * Whether this PHP can verify the algorithm (Ed25519 needs ext-sodium).
+     */
+    public function supports(string $alg): bool
+    {
+        $alg = $this->normalizeAlgorithm($alg);
+        if ($alg === null) {
+            return false;
+        }
+
+        return $alg === 'ed25519' ? extension_loaded('sodium') : extension_loaded('openssl');
+    }
+
     /**
      * @param array<string, mixed> $jwk Public JWK from the signer's profile.
-     * @param string $alg RFC 9421 algorithm identifier.
+     * @param string $alg RFC 9421 or JWA algorithm name. Empty: derive it from the key.
      * @param string $base Reconstructed signature base.
      * @param string $signature Raw signature bytes.
      */
     public function verify(array $jwk, string $alg, string $base, string $signature): bool
     {
-        $alg = strtolower(trim($alg));
-        if (!isset(self::ALGORITHMS[$alg])) {
+        $derived = $this->algorithmFor($jwk);
+        if ($derived === null) {
             return false;
         }
 
-        [$kty, $crv, $digest, $width, $prefix] = self::ALGORITHMS[$alg];
-
-        // The key must actually be of the type the algorithm names. Without
-        // this check a signer could nominate a weaker algorithm than the key
-        // the profile advertises.
-        if (($jwk['kty'] ?? null) !== $kty || ($jwk['crv'] ?? null) !== $crv) {
-            return false;
+        if (trim($alg) !== '') {
+            // The key must actually be of the type the algorithm names.
+            // Without this check a signer could nominate a weaker algorithm
+            // than the key the profile advertises.
+            if ($this->normalizeAlgorithm($alg) !== $derived) {
+                return false;
+            }
         }
 
-        return $alg === 'ed25519'
+        [, , $digest, $width, $prefix] = self::ALGORITHMS[$derived];
+
+        return $derived === 'ed25519'
             ? $this->verifyEd25519($jwk, $base, $signature)
-            : $this->verifyEc($jwk, $base, $signature, $digest, $width, $prefix);
+            : $this->verifyEc($jwk, $base, $signature, (int) $digest, $width, $prefix);
     }
 
     /**

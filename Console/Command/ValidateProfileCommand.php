@@ -122,6 +122,18 @@ class ValidateProfileCommand extends Command
             );
         }
 
+        // ── Order lookups without signatures (2.2.2) ─────────────────────
+        $capabilities = $profile['ucp']['capabilities'] ?? [];
+        if (is_array($capabilities) && isset($capabilities['dev.ucp.shopping.order'])
+            && $this->config?->getInboundSignatureMode() === Config::SIGNATURE_MODE_DISABLED
+        ) {
+            $warnings[] = 'dev.ucp.shopping.order is advertised while Inbound Signature '
+                . 'Verification is "disabled". Order reads and checkout operations are then '
+                . 'tied only to the UCP-Agent header the agent sends, which nobody checks. '
+                . 'Set it to "optional" (and later "required") under '
+                . 'Stores > Configuration > Angeo UCP > Request Security.';
+        }
+
         // ── Service bindings ──────────────────────────────────────────────
         $services = self::registryToArray($profile['ucp']['services'] ?? []);
         if ($services === []) {

@@ -1,0 +1,188 @@
+name: UCP official checks
+
+# Checks the business profiles this module generates with the tools the UCP
+# project itself publishes:
+#
+#  1. ucp-schema (official CLI) validates each profile against the JSON
+#     Schemas of the spec release the module advertises.
+#  2. The official conformance suite runs its core tier (discovery profile,
+#     spec/schema URLs, envelope headers) against each profile.
+#  3. Spec watch (weekly): opens an issue when UCP publishes a release newer
+#     than the one pinned below. A pinned check is right for the version we
+#     claim; the watch is what notices a new version.
+#
+# The profiles are produced by Test/Conformance/ProfileFixturesTest from the
+# real ProfileGenerator, and served by `php -S` with the headers the
+# /.well-known/ucp controller sends.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Must equal Angeo\Ucp\Model\Config::PROTOCOL_VERSION (checked below).
+  UCP_SPEC_TAG: v2026-08-25
+  # Official CLI from crates.io.
+  UCP_SCHEMA_VERSION: 2.0.0
+  # Conformance suite revision. Pin a commit SHA for fully reproducible runs.
+  UCP_CONFORMANCE_REF: main
+
+jobs:
+  profiles:
+    name: Profiles — ucp-schema + conformance core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: bcmath, ctype, curl, dom, gd, iconv, intl, json, mbstring, openssl, pdo_mysql, simplexml, soap, sockets, sodium, xsl, zip
+          coverage: none
+          tools: composer:v2
+
+      - name: Add Magento package mirror
+        run: composer config repositories.mage-os '{"type":"composer","url":"https://mirror.mage-os.org/","canonical":false}'
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-progress --no-interaction
+
+      - name: Generate business profiles
+        run: UCP_FIXTURE_DIR=build/ucp vendor/bin/phpunit --configuration phpunit.xml --testsuite conformance
+
+      - name: Advertised version matches the pinned spec release
+        run: |
+          advertised=$(php -r 'echo json_decode(file_get_contents("build/ucp/checkout.json"), true)["ucp"]["version"];')
+          echo "Profile advertises $advertised, workflow pins $UCP_SPEC_TAG"
+          test "v$advertised" = "$UCP_SPEC_TAG"
+
+      # ── 1. ucp-schema ────────────────────────────────────────────────
+      - name: Get the spec release
+        run: git clone --quiet --depth 1 --branch "$UCP_SPEC_TAG" https://github.com/Universal-Commerce-Protocol/ucp.git build/spec
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache ucp-schema
+        id: ucp-schema-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/ucp-schema
+          key: ucp-schema-${{ env.UCP_SCHEMA_VERSION }}-${{ runner.os }}
+
+      - name: Install ucp-schema
+        if: steps.ucp-schema-cache.outputs.cache-hit != 'true'
+        run: cargo install ucp-schema --version "$UCP_SCHEMA_VERSION" --locked
+
+      - name: Validate profiles with ucp-schema
+        run: |
+          version="${UCP_SPEC_TAG#v}"
+          status=0
+          for profile in build/ucp/*.json; do
+            echo "::group::ucp-schema validate $profile"
+            if ucp-schema validate "$profile" \
+                --schema build/spec/source/schemas/profile.json \
+                --def business_schema \
+                --response --op read \
+                --schema-local-base build/spec/source/schemas \
+                --schema-remote-base "https://ucp.dev/${version}/schemas" \
+                --json; then
+              echo "valid: $profile"
+            else
+              echo "::error file=$profile::ucp-schema rejected this profile"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $status
+
+      # ── 2. Conformance suite, core tier ──────────────────────────────
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Get the conformance suite
+        run: |
+          git clone --quiet https://github.com/Universal-Commerce-Protocol/conformance.git build/conformance
+          git -C build/conformance checkout --quiet "$UCP_CONFORMANCE_REF"
+          echo "Conformance suite at $(git -C build/conformance rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          # --no-sources: the suite's pyproject points ucp-sdk at a sibling
+          # checkout of python-sdk main; use the version it pins on PyPI.
+          uv sync --no-sources --directory build/conformance
+
+      - name: Conformance core — catalog profile
+        run: |
+          UCP_PROFILE=build/ucp/catalog.json php -S 127.0.0.1:8183 Test/Conformance/server.php > build/server-catalog.log 2>&1 &
+          sleep 1
+          uv run --no-sources --directory build/conformance ucp-conformance \
+            --server_url=http://127.0.0.1:8183 \
+            --conformance_input="$GITHUB_WORKSPACE/Test/Conformance/conformance_input.catalog.json" \
+            --suite=core | tee build/conformance-catalog.txt
+
+      - name: Conformance core — checkout profile
+        run: |
+          UCP_PROFILE=build/ucp/checkout.json php -S 127.0.0.1:8182 Test/Conformance/server.php > build/server-checkout.log 2>&1 &
+          sleep 1
+          uv run --no-sources --directory build/conformance ucp-conformance \
+            --server_url=http://127.0.0.1:8182 \
+            --conformance_input="$GITHUB_WORKSPACE/Test/Conformance/conformance_input.checkout.json" \
+            --suite=core | tee build/conformance-checkout.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### UCP official checks"
+            echo "Spec release: \`$UCP_SPEC_TAG\`, ucp-schema \`$UCP_SCHEMA_VERSION\`"
+            for f in build/conformance-*.txt; do
+              [ -f "$f" ] || continue
+              echo "#### $(basename "$f" .txt)"
+              echo '```'
+              sed -n '/CONFORMANCE TEST SUMMARY/,/^====/p' "$f"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ucp-profiles
+          path: |
+            build/ucp/
+            build/conformance-*.txt
+            build/server-*.log
+
+  spec-watch:
+    name: Spec watch
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Compare with the latest UCP release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api repos/Universal-Commerce-Protocol/ucp/releases/latest --jq .tag_name)
+          echo "Latest UCP release: $latest, pinned: $UCP_SPEC_TAG" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$latest" = "$UCP_SPEC_TAG" ]; then
+            exit 0
+          fi
+          title="UCP $latest is out (module pins $UCP_SPEC_TAG)"
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number' | grep -q .; then
+            echo "Issue already open."
+            exit 0
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label "spec" \
+            --body "The Universal Commerce Protocol published \`$latest\`. This module advertises and is checked against \`$UCP_SPEC_TAG\`.
+
+          Release notes: https://github.com/Universal-Commerce-Protocol/ucp/releases/tag/$latest
+
+          Before moving: compare the schemas, update \`Config::PROTOCOL_VERSION\` and \`UCP_SPEC_TAG\` in \`.github/workflows/ucp-official.yml\` together." \
+            || gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+            --body "UCP published $latest; this module pins $UCP_SPEC_TAG."

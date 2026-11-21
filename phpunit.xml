@@ -11,6 +11,10 @@
         <testsuite name="unit">
             <directory>Test/Unit</directory>
         </testsuite>
+        <!-- Profiles for the official UCP checks (.github/workflows/ucp-official.yml). -->
+        <testsuite name="conformance">
+            <directory>Test/Conformance</directory>
+        </testsuite>
     </testsuites>
     <source>
         <include>

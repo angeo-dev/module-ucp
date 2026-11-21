@@ -8,6 +8,8 @@ declare(strict_types=1);
 
 namespace Angeo\Ucp\Model\Signature;
 
+use Angeo\Ucp\Model\Config;
+use Angeo\Ucp\Model\Network\PublicAddressGuard;
 use Magento\Framework\App\CacheInterface;
 use Psr\Log\LoggerInterface;
 
@@ -23,8 +25,12 @@ use Psr\Log\LoggerInterface;
  *  - MUST NOT follow redirects (3xx).
  *  - MUST reject URLs resolving to special-use IP ranges (RFC 6890) —
  *    loopback, link-local including the cloud metadata address
- *    169.254.169.254, private and reserved. The RESOLVED address is
- *    checked, not just the hostname, which is what resists DNS rebinding.
+ *    169.254.169.254, private, shared (100.64.0.0/10) and reserved. Every
+ *    RESOLVED address is checked by PublicAddressGuard, and curl connects
+ *    to the checked address (CURLOPT_RESOLVE), so a second DNS answer
+ *    cannot redirect the request (DNS rebinding). 2.2.2: before, curl
+ *    resolved the name again on its own.
+ *  - Only port 443 by default (PublicAddressGuard `allowedPorts`).
  *  - SHOULD bound the response body; the spec says not below 128 KiB, so
  *    that is the floor used here.
  *  - SHOULD enforce connect and response timeouts.
@@ -42,8 +48,9 @@ class ProfileFetcher
     private const TOTAL_TIMEOUT    = 5;
 
     public function __construct(
-        private readonly CacheInterface  $cache,
-        private readonly LoggerInterface $logger
+        private readonly CacheInterface     $cache,
+        private readonly LoggerInterface    $logger,
+        private readonly PublicAddressGuard $addressGuard
     ) {
     }
 
@@ -54,7 +61,13 @@ class ProfileFetcher
      */
     public function fetch(string $url, bool $forceRefresh = false): ?array
     {
-        if (!$this->isFetchable($url)) {
+        $target = $this->addressGuard->inspect($url, $reason);
+        if ($target === null) {
+            $this->logger->info(sprintf(
+                '[Angeo_Ucp] Refusing to fetch peer profile %s: %s.',
+                $url,
+                (string) $reason
+            ));
             return null;
         }
 
@@ -77,7 +90,7 @@ class ProfileFetcher
             return null;
         }
 
-        $body = $this->request($url);
+        $body = $this->request($url, $target);
         if ($body === null) {
             return null;
         }
@@ -141,85 +154,41 @@ class ProfileFetcher
     }
 
     /**
-     * HTTPS, parseable, no userinfo, and not pointed at internal space.
+     * The curl options for one fetch. Public so the hardening can be
+     * asserted in tests: no redirects, https only, pinned address, bounded
+     * body and time.
+     *
+     * @param array{host: string, port: int, ip: string} $target From PublicAddressGuard::inspect().
+     * @return array<int, mixed>
      */
-    private function isFetchable(string $url): bool
+    public function curlOptions(array $target): array
     {
-        $parts = parse_url($url);
-
-        if ($parts === false || empty($parts['host'])) {
-            return false;
-        }
-
-        if (strtolower((string) ($parts['scheme'] ?? '')) !== 'https') {
-            return false;
-        }
-
-        if (isset($parts['user']) || isset($parts['pass'])) {
-            return false;
-        }
-
-        return $this->resolvesToPublicAddress((string) $parts['host']);
+        return [
+            CURLOPT_RETURNTRANSFER => true,
+            // MUST NOT follow redirects.
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
+            CURLOPT_TIMEOUT        => self::TOTAL_TIMEOUT,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+            // Connect to the address that was checked, not to a fresh
+            // DNS answer.
+            CURLOPT_RESOLVE        => [PublicAddressGuard::resolveEntry($target)],
+            CURLOPT_HTTPHEADER     => ['Accept: application/json'],
+            CURLOPT_USERAGENT      => 'Angeo-UCP/' . Config::MODULE_VERSION . ' (+https://angeo.dev)',
+            // Abort as soon as the body exceeds the bound, instead of
+            // buffering an unbounded response.
+            CURLOPT_NOPROGRESS     => false,
+            CURLOPT_PROGRESSFUNCTION => static fn ($h, $expected, $downloaded): int
+                => $downloaded > self::MAX_BODY_BYTES ? 1 : 0,
+        ];
     }
 
     /**
-     * Resolve the hostname and reject any special-use address.
-     *
-     * Checking the resolved address rather than the literal hostname is the
-     * point: `internal.example.com` can resolve to 127.0.0.1, and the
-     * cloud metadata endpoint is reachable by name on several providers.
+     * @param array{host: string, port: int, ip: string} $target
      */
-    private function resolvesToPublicAddress(string $host): bool
-    {
-        $addresses = [];
-
-        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
-            $addresses[] = $host;
-        } else {
-            foreach (['A' => DNS_A, 'AAAA' => DNS_AAAA] as $type => $flag) {
-                // Magento's error handler turns the DNS warning into an
-                // exception; an unresolvable host simply yields no records.
-                try {
-                    $records = dns_get_record($host, $flag) ?: [];
-                } catch (\Throwable $e) {
-                    $records = [];
-                }
-                foreach ($records as $record) {
-                    $addresses[] = $record[$type === 'A' ? 'ip' : 'ipv6'] ?? '';
-                }
-            }
-        }
-
-        $addresses = array_values(array_filter($addresses));
-
-        if ($addresses === []) {
-            return false;
-        }
-
-        foreach ($addresses as $address) {
-            $public = filter_var(
-                $address,
-                FILTER_VALIDATE_IP,
-                FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
-            );
-
-            // Every resolved address must be public. One private answer is
-            // enough to make the name untrustworthy.
-            if ($public === false) {
-                $this->logger->warning(sprintf(
-                    '[Angeo_Ucp] Refusing to fetch peer profile: host "%s" resolves '
-                    . 'to the special-use address %s.',
-                    $host,
-                    $address
-                ));
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private function request(string $url): ?string
+    private function request(string $url, array $target): ?string
     {
         if (!function_exists('curl_init')) {
             $this->logger->error(
@@ -233,23 +202,7 @@ class ProfileFetcher
             return null;
         }
 
-        curl_setopt_array($handle, [
-            CURLOPT_RETURNTRANSFER => true,
-            // MUST NOT follow redirects.
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT,
-            CURLOPT_TIMEOUT        => self::TOTAL_TIMEOUT,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
-            CURLOPT_HTTPHEADER     => ['Accept: application/json'],
-            CURLOPT_USERAGENT      => 'Angeo-UCP/2.1 (+https://angeo.dev)',
-            // Abort as soon as the body exceeds the bound, instead of
-            // buffering an unbounded response.
-            CURLOPT_NOPROGRESS     => false,
-            CURLOPT_PROGRESSFUNCTION => static fn ($h, $expected, $downloaded): int
-                => $downloaded > self::MAX_BODY_BYTES ? 1 : 0,
-        ]);
+        curl_setopt_array($handle, $this->curlOptions($target));
 
         $body   = curl_exec($handle);
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);

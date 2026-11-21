@@ -1,0 +1,7 @@
+{
+  "ucp_version": "2026-08-25",
+  "required_capabilities": [
+    "dev.ucp.shopping.catalog.search",
+    "dev.ucp.shopping.catalog.lookup"
+  ]
+}

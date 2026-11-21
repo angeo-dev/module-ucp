@@ -142,9 +142,11 @@ class StructuredFields
             $label = trim(substr($member, 0, $eq));
             $rest  = trim(substr($member, $eq + 1));
 
-            $semi   = strpos($rest, ';');
-            $bare   = $semi === false ? $rest : substr($rest, 0, $semi);
-            $params = $semi === false ? [] : self::parseParameters(substr($rest, $semi));
+            // Split on ';' outside quotes only: a quoted URL may itself
+            // contain ';' (2.2.2 fix — the first ';' anywhere was used).
+            $pieces = self::splitTopLevel($rest, ';');
+            $bare   = (string) array_shift($pieces);
+            $params = $pieces === [] ? [] : self::parseParameters(implode(';', $pieces));
 
             $bare = trim(trim($bare), '"');
             if ($label === '' || $bare === '') {
@@ -152,6 +154,38 @@ class StructuredFields
             }
 
             $out[$label] = ['value' => $bare, 'params' => $params];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Each top-level member's value text exactly as it appeared, keyed by
+     * label. Splits on commas outside quotes and parentheses, so a quoted
+     * parameter containing a comma stays in its member.
+     *
+     * Used for the `@signature-params` line, which RFC 9421 requires to
+     * echo the original bytes.
+     *
+     * @return array<string, string>
+     */
+    public static function rawMembers(string $value): array
+    {
+        $out = [];
+
+        foreach (self::splitTopLevel($value, ',') as $member) {
+            $member = trim($member);
+            $eq = strpos($member, '=');
+            if ($eq === false) {
+                continue;
+            }
+
+            $label = trim(substr($member, 0, $eq));
+            if ($label === '') {
+                continue;
+            }
+
+            $out[$label] = trim(substr($member, $eq + 1));
         }
 
         return $out;

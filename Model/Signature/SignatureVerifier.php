@@ -9,7 +9,7 @@ declare(strict_types=1);
 namespace Angeo\Ucp\Model\Signature;
 
 use Angeo\Ucp\Api\SignatureVerifierInterface;
-use Angeo\Ucp\Model\AuthorityBinding;
+use Angeo\Ucp\Model\AgentHeader;
 use Angeo\Ucp\Model\Keys\JwkFormatter;
 use Magento\Framework\App\Request\Http as HttpRequest;
 use Psr\Log\LoggerInterface;
@@ -23,17 +23,26 @@ use Psr\Log\LoggerInterface;
  * failure. Only when every signature has been skipped or rejected — and at
  * least one was present — does the request fail.
  *
- * Key resolution uses the default UCP mechanism: read the `UCP-Agent`
- * header, fetch that profile, and match `keyid` against its `keys[]`.
- * `Signature-Agent` (Web Bot Auth) is an optional additive layer; this
- * implementation resolves the `jwks_uri` form, which points back at a
- * profile, and skips `cimd` and `directory` rather than pretending to
- * support them.
+ * Key resolution uses the default UCP mechanism: read the `profile` member
+ * of the `UCP-Agent` dictionary, fetch that profile, and match `keyid`
+ * against its `keys[]`. `Signature-Agent` (Web Bot Auth) is an optional
+ * additive layer, used only when `UCP-Agent` is absent: the member whose key
+ * equals the signature label, with `type=jwks_uri`. `cimd` and `directory`
+ * are skipped rather than pretended.
+ *
+ * The algorithm comes from the matched key's kty/crv. The spec says `alg`
+ * is NOT included in Signature-Input; if a signer sends it anyway it must
+ * agree with the key.
  *
  * Covered-component enforcement is where most of the security lives: a
  * signature that does not cover the request target, the body digest, or a
  * present `ucp-agent` / `signature-agent` / `idempotency-key` header is
  * skipped, because an uncovered component is an unsigned component.
+ *
+ * 2.2.2 fixes two defects that made verification fail for every
+ * spec-conformant signer: the raw `UCP-Agent` header was used as the URL
+ * (instead of its `profile` member), and a missing `alg` parameter skipped
+ * the signature.
  */
 class SignatureVerifier implements SignatureVerifierInterface
 {
@@ -46,12 +55,19 @@ class SignatureVerifier implements SignatureVerifierInterface
     /** Required when present on the request (closed set per the spec). */
     private const REQUIRED_IF_PRESENT = ['ucp-agent', 'signature-agent', 'idempotency-key'];
 
+    /** Clock drift allowed on `created` and `expires`, in seconds. */
+    private const SKEW = 300;
+
+    /** Longest `expires - created` window accepted on a WBA-shape signature. */
+    private const MAX_WBA_WINDOW = 86400;
+
     public function __construct(
         private readonly ProfileFetcher  $profileFetcher,
         private readonly SignatureBase   $signatureBase,
         private readonly JwkVerifier     $jwkVerifier,
         private readonly JwkFormatter    $jwkFormatter,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        private readonly AuthorityPolicy $authorityPolicy
     ) {
     }
 
@@ -66,7 +82,8 @@ class SignatureVerifier implements SignatureVerifierInterface
 
         if (trim($inputHeader) === '' || trim($sigHeader) === '') {
             return VerificationResult::failed(
-                'Signature and Signature-Input must both be present.'
+                'Signature and Signature-Input must both be present.',
+                VerificationResult::CODE_SIGNATURE_MISSING
             );
         }
 
@@ -77,17 +94,20 @@ class SignatureVerifier implements SignatureVerifierInterface
             return VerificationResult::failed('Signature headers could not be parsed.');
         }
 
-        $rawParams = $this->rawSignatureParams($inputHeader);
+        $rawParams = StructuredFields::rawMembers($inputHeader);
         $skipped   = [];
+        $codes     = [];
 
         foreach ($inputs as $label => $input) {
             if (!isset($signatures[$label], $rawParams[$label])) {
                 $skipped[] = $label . ': no matching Signature member';
+                $codes[]   = VerificationResult::CODE_SIGNATURE_INVALID;
                 continue;
             }
 
             $outcome = $this->verifyOne(
                 $request,
+                (string) $label,
                 $input,
                 $rawParams[$label],
                 $signatures[$label]
@@ -97,7 +117,9 @@ class SignatureVerifier implements SignatureVerifierInterface
                 return $outcome;
             }
 
-            $skipped[] = $label . ': ' . $outcome;
+            [$reason, $code] = $outcome;
+            $skipped[] = $label . ': ' . $reason;
+            $codes[]   = $code;
         }
 
         // Every signature was skipped or rejected. Do not leak which key or
@@ -106,77 +128,102 @@ class SignatureVerifier implements SignatureVerifierInterface
             '[Angeo_Ucp] Inbound signature verification failed. ' . implode(' | ', $skipped)
         );
 
-        return VerificationResult::failed('No signature on this request could be verified.');
+        $codes = array_values(array_unique($codes));
+
+        return VerificationResult::failed(
+            'No signature on this request could be verified.',
+            count($codes) === 1 ? $codes[0] : VerificationResult::CODE_SIGNATURE_INVALID
+        );
     }
 
     /**
      * @param array{components: array<int, array{name: string, params: array<string, string>}>, params: array<string, string>} $input
-     * @return VerificationResult|string Result on success, skip reason otherwise.
+     * @return VerificationResult|array{0: string, 1: string} Result on success, [skip reason, error code] otherwise.
      */
     private function verifyOne(
         HttpRequest $request,
+        string $label,
         array $input,
         string $rawParams,
         string $signature
-    ): VerificationResult|string {
-        $params = $input['params'];
-        $tag    = $params['tag']    ?? '';
-        $keyId  = $params['keyid']  ?? '';
-        $alg    = $params['alg']    ?? '';
+    ): VerificationResult|array {
+        $invalid = VerificationResult::CODE_SIGNATURE_INVALID;
+        $params  = $input['params'];
+        $tag     = $params['tag']   ?? '';
+        $keyId   = $params['keyid'] ?? '';
+        $alg     = $params['alg']   ?? '';
 
-        if ($keyId === '' || $alg === '') {
-            return 'missing keyid or alg';
+        if ($keyId === '') {
+            return ['missing keyid', $invalid];
         }
 
         // Signatures scoped to a purpose this verifier does not handle are
         // skipped, not failed.
         if ($tag !== '' && $tag !== 'web-bot-auth') {
-            return 'unsupported tag "' . $tag . '"';
+            return ['unsupported tag "' . $tag . '"', $invalid];
         }
 
-        $expiryProblem = $this->checkFreshness($params);
+        if ($alg !== '' && $this->jwkVerifier->normalizeAlgorithm($alg) === null) {
+            return ['unsupported alg "' . $alg . '"', VerificationResult::CODE_ALGORITHM_UNSUPPORTED];
+        }
+
+        $expiryProblem = $this->checkFreshness($params, $tag === 'web-bot-auth');
         if ($expiryProblem !== null) {
-            return $expiryProblem;
+            return [$expiryProblem, $invalid];
         }
 
         $componentProblem = $this->checkCoveredComponents($request, $input['components']);
         if ($componentProblem !== null) {
-            return $componentProblem;
+            return [$componentProblem, $invalid];
         }
 
         $digestProblem = $this->checkContentDigest($request);
         if ($digestProblem !== null) {
-            return $digestProblem;
+            return [$digestProblem, VerificationResult::CODE_DIGEST_MISMATCH];
         }
 
-        $profileUrl = $this->resolveProfileUrl($request);
+        $authority = $this->signatureBase->requestAuthority($request);
+        if (!$this->authorityPolicy->isAllowed($authority)) {
+            return ['@authority "' . $authority . '" is not a host of this store', $invalid];
+        }
+
+        $profileUrl = $this->resolveProfileUrl($request, $label);
         if ($profileUrl === null) {
-            return 'no resolvable UCP-Agent or Signature-Agent profile URL';
+            return ['no resolvable UCP-Agent or Signature-Agent profile URL', VerificationResult::CODE_KEY_NOT_FOUND];
         }
 
         $key = $this->resolveKey($profileUrl, $keyId);
         if ($key === null) {
-            return 'no eligible key matching keyid "' . $keyId . '"';
+            return ['no eligible key matching keyid "' . $keyId . '"', VerificationResult::CODE_KEY_NOT_FOUND];
         }
 
         // WBA-shape signatures bind the advertised key identity to its bytes.
         if ($tag === 'web-bot-auth') {
             try {
                 if ($this->jwkFormatter->thumbprint($key) !== $keyId) {
-                    return 'keyid is not the RFC 7638 thumbprint of the matched key';
+                    return ['keyid is not the RFC 7638 thumbprint of the matched key', $invalid];
                 }
             } catch (\Throwable) {
-                return 'thumbprint could not be computed for the matched key';
+                return ['thumbprint could not be computed for the matched key', $invalid];
             }
+        }
+
+        // The algorithm comes from the key (kty/crv).
+        $derived = $this->jwkVerifier->algorithmFor($key);
+        if ($derived === null || !$this->jwkVerifier->supports($derived)) {
+            return ['the matched key\'s type is not supported', VerificationResult::CODE_ALGORITHM_UNSUPPORTED];
+        }
+        if ($alg !== '' && $this->jwkVerifier->normalizeAlgorithm($alg) !== $derived) {
+            return ['alg "' . $alg . '" does not match the key type', $invalid];
         }
 
         $base = $this->signatureBase->build($request, $input['components'], $rawParams);
         if ($base === null) {
-            return 'signature base could not be reconstructed';
+            return ['signature base could not be reconstructed', $invalid];
         }
 
-        if (!$this->jwkVerifier->verify($key, $alg, $base, $signature)) {
-            return 'signature did not verify';
+        if (!$this->jwkVerifier->verify($key, $derived, $base, $signature)) {
+            return ['signature did not verify', $invalid];
         }
 
         return VerificationResult::verified($profileUrl, $keyId);
@@ -184,25 +231,46 @@ class SignatureVerifier implements SignatureVerifierInterface
 
     /**
      * `created` in the future or `expires` in the past make the signature
-     * unusable. A 300-second skew allowance covers ordinary clock drift.
+     * unusable; a 300-second skew allowance covers ordinary clock drift.
+     * Both are integers (RFC 9421 §2.3) when present.
+     *
+     * WBA-shape signatures MUST carry both (UCP spec, WBA interop), and the
+     * window SHOULD be at most 24 hours — enforced here, because a longer
+     * window is a longer replay window.
      *
      * @param array<string, string> $params
      */
-    private function checkFreshness(array $params): ?string
+    private function checkFreshness(array $params, bool $webBotAuth): ?string
     {
-        $skew = 300;
-        $now  = time();
+        $now = time();
 
-        if (isset($params['expires']) && is_numeric($params['expires'])
-            && (int) $params['expires'] + $skew < $now
-        ) {
+        foreach (['created', 'expires'] as $name) {
+            if (isset($params[$name]) && !preg_match('/^\d{1,12}$/', $params[$name])) {
+                return '"' . $name . '" is not an integer';
+            }
+        }
+
+        $created = isset($params['created']) ? (int) $params['created'] : null;
+        $expires = isset($params['expires']) ? (int) $params['expires'] : null;
+
+        if ($expires !== null && $expires + self::SKEW < $now) {
             return 'signature expired';
         }
 
-        if (isset($params['created']) && is_numeric($params['created'])
-            && (int) $params['created'] - $skew > $now
-        ) {
+        if ($created !== null && $created - self::SKEW > $now) {
             return 'signature created in the future';
+        }
+
+        if ($webBotAuth) {
+            if ($created === null || $expires === null) {
+                return 'web-bot-auth signature must carry created and expires';
+            }
+            if ($expires <= $created) {
+                return 'expires is not after created';
+            }
+            if ($expires - $created > self::MAX_WBA_WINDOW) {
+                return 'web-bot-auth validity window is longer than 24 hours';
+            }
         }
 
         return null;
@@ -278,15 +346,16 @@ class SignatureVerifier implements SignatureVerifierInterface
     }
 
     /**
-     * UCP-Agent is the default mechanism. Signature-Agent with
-     * `type=jwks_uri` also resolves to a profile; cimd and directory are
+     * UCP-Agent (its `profile` member) is the default mechanism. Without
+     * it, the Signature-Agent member keyed by this signature's label, with
+     * `type=jwks_uri`, also resolves to a profile; cimd and directory are
      * not implemented and fall through.
      */
-    private function resolveProfileUrl(HttpRequest $request): ?string
+    private function resolveProfileUrl(HttpRequest $request, string $label): ?string
     {
-        $ucpAgent = trim((string) ($request->getHeader('ucp-agent') ?: ''));
-        if ($ucpAgent !== '') {
-            return trim($ucpAgent, '"');
+        $profile = AgentHeader::profile((string) ($request->getHeader('ucp-agent') ?: ''));
+        if ($profile !== '') {
+            return $profile;
         }
 
         $signatureAgent = trim((string) ($request->getHeader('signature-agent') ?: ''));
@@ -294,10 +363,9 @@ class SignatureVerifier implements SignatureVerifierInterface
             return null;
         }
 
-        foreach (StructuredFields::parseStringDictionary($signatureAgent) as $member) {
-            if (($member['params']['type'] ?? '') === 'jwks_uri') {
-                return $member['value'];
-            }
+        $member = StructuredFields::parseStringDictionary($signatureAgent)[$label] ?? null;
+        if ($member !== null && ($member['params']['type'] ?? '') === 'jwks_uri') {
+            return $member['value'];
         }
 
         return null;
@@ -327,29 +395,5 @@ class SignatureVerifier implements SignatureVerifierInterface
         }
 
         return null;
-    }
-
-    /**
-     * Extract each signature's parameter text EXACTLY as it appeared.
-     *
-     * RFC 9421 requires the `@signature-params` line to echo the original
-     * bytes. Re-serialising from the parsed structure would reorder or
-     * requote parameters and produce a base that never matches.
-     *
-     * @return array<string, string>
-     */
-    private function rawSignatureParams(string $header): array
-    {
-        $out = [];
-
-        if (!preg_match_all('/([A-Za-z0-9_\-]+)=(\([^)]*\)[^,]*)/', $header, $matches, PREG_SET_ORDER)) {
-            return $out;
-        }
-
-        foreach ($matches as $match) {
-            $out[$match[1]] = trim($match[2]);
-        }
-
-        return $out;
     }
 }

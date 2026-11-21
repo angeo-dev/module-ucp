@@ -46,6 +46,7 @@
                         integration the moment this module is upgraded.
                     -->
                     <inbound_signature_mode>disabled</inbound_signature_mode>
+                    <check_authority>1</check_authority>
                 </security>
             </angeo_ucp>
     </default>

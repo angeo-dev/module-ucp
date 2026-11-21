@@ -45,6 +45,9 @@ class Config
     /** Protocol version shipped by 1.x, kept for the migration notice. */
     public const PREVIOUS_PROTOCOL_VERSION = '2026-04-08';
 
+    /** Module release, sent in the outbound User-Agent. */
+    public const MODULE_VERSION = '2.2.2';
+
     public const XML_PATH_ENABLED               = 'angeo_ucp/general/enabled';
 
     // Root capabilities.
@@ -66,6 +69,7 @@ class Config
     public const XML_PATH_EXT_DISCOUNT          = 'angeo_ucp/extensions/discount_enabled';
     public const XML_PATH_EXT_BUYER_CONSENT     = 'angeo_ucp/extensions/buyer_consent_enabled';
     public const XML_PATH_INBOUND_SIGNATURE_MODE = 'angeo_ucp/security/inbound_signature_mode';
+    public const XML_PATH_CHECK_AUTHORITY        = 'angeo_ucp/security/check_authority';
 
     // Identity-linking OAuth scopes (comma-separated list in admin).
     public const XML_PATH_IDENTITY_SCOPES       = 'angeo_ucp/capabilities/identity_linking_scopes';
@@ -319,6 +323,23 @@ class Config
             self::SIGNATURE_MODE_OPTIONAL,
             self::SIGNATURE_MODE_REQUIRED,
         ], true) ? $mode : self::SIGNATURE_MODE_DISABLED;
+    }
+
+    /**
+     * Whether a verified signature's `@authority` must be one of this
+     * Magento's store hosts (2.2.2, on by default).
+     *
+     * `@authority` is covered so a signature cannot be relayed to another
+     * host. The spec only requires it to be covered; checking it against
+     * our own hosts is what stops a request signed for shop A from being
+     * accepted by shop B when B's web server answers any Host header.
+     */
+    public function isAuthorityCheckEnabled(): bool
+    {
+        $value = $this->scopeConfig->getValue(self::XML_PATH_CHECK_AUTHORITY, ScopeInterface::SCOPE_STORE);
+
+        // Unset (older config.xml cache) counts as on.
+        return $value === null || $value === '' || (bool) (int) $value;
     }
 
     /**

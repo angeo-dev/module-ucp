@@ -299,6 +299,18 @@
                         watch the log.
                     ]]></comment>
                 </field>
+                <field id="check_authority" translate="label comment" type="select" sortOrder="20"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Check Signed Host (@authority)</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[
+                        A verified signature must name one of this Magento's
+                        store hosts in <code>@authority</code>. Stops a request
+                        signed for another site from being replayed here.
+                        Turn off only if agents reach the store under a host
+                        that is not a configured base URL.
+                    ]]></comment>
+                </field>
             </group>
 </section>
     </system>

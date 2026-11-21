@@ -2,9 +2,8 @@
 
 ## Supported versions
 
-`angeo/module-ucp` is pre-1.0. Only the latest tag receives security fixes.
-Once 1.0.0 ships, the latest minor will be supported for security fixes for
-six months past the next minor's release.
+Security fixes go to the latest minor release of the current major
+(2.2.x as of 2.2.2). Upgrade within the major line to receive them.
 
 ## Reporting a vulnerability
 
